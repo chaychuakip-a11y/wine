@@ -78,47 +78,59 @@ exec "$APPIMAGE" "$@"
 
 `wine-staging-fixed.AppImage` 通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载。
 
-## 安装方式
+## 安装
 
-### 方式一：系统共享安装（推荐多用户场景）
+### 单用户安装（无需 root，推荐）
 
-一份 AppImage + 一份 launcher，所有用户共用，各自的挂载点和数据完全隔离：
+**内网环境**：从共享目录直接运行，脚本自动从同目录复制文件，不需要联网：
 
 ```bash
-# 下载 AppImage
-wget -O wine-staging-fixed.AppImage \
-  https://github.com/chaychuakip-a11y/wine/releases/download/v11.6-fixed/wine-staging-fixed.AppImage
+# 管理员将以下三个文件放到共享目录（如 NFS、U 盘、scp 等）
+#   wine-staging-fixed.AppImage
+#   wine-appimage-launcher.sh
+#   install-user.sh
 
-# 一键安装（需要 root）
-sudo bash install.sh
-
-# 任意用户直接使用
-wine foo.exe
-wine winecfg
-WINEPREFIX=~/.mywine wine setup.exe
+# 每个用户自行执行一次
+bash /共享路径/install-user.sh
+source ~/.bashrc
 ```
 
-安装后文件布局：
-```
-/opt/wine-staging-fixed.AppImage   AppImage 本体（root 只读，所有用户共享）
-/usr/local/bin/wine                launcher（所有用户共用同一个脚本）
+**有网络**：一条命令搞定：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/chaychuakip-a11y/wine/master/install-user.sh)
 ```
 
-每个用户运行时各自拥有：
+安装位置（均在 `$HOME` 下，不影响其他用户）：
+
+```
+~/.local/share/wine-appimage/wine-staging-fixed.AppImage   AppImage 本体
+~/.local/bin/wine                                           launcher
+```
+
+运行时各用户私有目录：
+
 | 目录 | 用途 |
 |------|------|
 | `/run/user/$UID/wine-appimage/` | FUSE 挂载点（登出自动清理） |
 | `~/.wine-appimage-staging/` | WINEPREFIX |
 | `~/.cache/wine-appimage-staging/` | DXVK 缓存等 |
 
-### 方式二：单用户安装
+卸载：
 
 ```bash
-mkdir -p ~/.local/bin
-cp wine-staging-fixed.AppImage  ~/.local/bin/
-cp wine-appimage-launcher.sh    ~/.local/bin/wine
-chmod +x ~/.local/bin/wine ~/.local/bin/wine-staging-fixed.AppImage
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+bash install-user.sh --uninstall
+```
+
+### 系统共享安装（需要 root）
+
+一份 AppImage 所有用户共用，数据仍各自隔离：
+
+```bash
+wget -O wine-staging-fixed.AppImage \
+  https://github.com/chaychuakip-a11y/wine/releases/download/v11.6-fixed/wine-staging-fixed.AppImage
+sudo bash install.sh        # 装到 /opt/ 和 /usr/local/bin/wine
+sudo bash install.sh --uninstall   # 卸载
 ```
 
 ## 回退原版
