@@ -1,0 +1,75 @@
+# ------------------------------------------------------------------
+# Per-user state dir (replaces undefined $progHome and /tmp hardcoding)
+# ------------------------------------------------------------------
+progHome="${XDG_CACHE_HOME:-$HOME/.cache}/wine-appimage-staging"
+mkdir -p "$progHome" 2>/dev/null
+
+# ------------------------------------------------------------------
+# Recursion guard
+# When wine/wineserver spawns a child PE (.exe) through exec*(), the
+# child can end up re-invoking this AppImage (binfmt / $PATH / xdg-open
+# lookups). That causes a fresh FUSE mount + full wrapper re-run for
+# every child, which looks like "AppRun runs the exe again and again".
+# We mark the current process tree with __WINE_APPIMAGE_ACTIVE and,
+# on re-entry, exec the inner wine binary directly with no re-setup.
+# ------------------------------------------------------------------
+if [ "${__WINE_APPIMAGE_ACTIVE:-0}" = "1" ] && [ -x "$APPDIR/usr/bin/wine" ] ; then
+    exec "$APPDIR/usr/bin/wine" "$@"
+fi
+export __WINE_APPIMAGE_ACTIVE=1
+
+# WINE env
+export WINE="$APPDIR/usr/bin/wine"
+export WINEDEBUG=${WINEDEBUG:-"fixme-all"}
+export WINEPREFIX=${WINEPREFIX:-"$HOME/.wine-appimage-staging"}
+export WINESERVER="$APPDIR/usr/bin/wineserver"
+
+# DXVK env
+export DXVK_HUD=${DXVK_HUD:-"0"}
+export DXVK_LOG_LEVEL=${DXVK_LOG_LEVEL:-"none"}
+export DXVK_STATE_CACHE=${DXVK_STATE_CACHE:-"0"}
+export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}
+
+# check gpu vendor
+VENDOR=$(glxinfo -B 2>/dev/null | grep "OpenGL vendor")
+
+if [[ $VENDOR == *"Intel"* ]]; then
+  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/intel_icd.i686.json:/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
+elif [[ $VENDOR == *"NVIDIA"* ]]; then
+  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+elif [[ $VENDOR == *"Radeon"* ]]; then
+  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/radeon_icd.i686.json:/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+fi
+
+# Load winecfg if no arguments given
+APPLICATION=""
+if [ -z "$*" ] ; then
+  APPLICATION="winecfg"
+fi
+
+# Allow the AppImage to be symlinked to e.g., /usr/bin/wineserver
+if [ -n "$APPIMAGE" ] ; then
+  BINARY_NAME=$(basename "$ARGV0")
+else
+  BINARY_NAME=$(basename "$0")
+fi
+
+if [ -n "$1" ] && [ -e "$APPDIR/bin/$1" ] ; then
+  MAIN="$APPDIR/bin/$1" ; shift
+elif [ -n "$1" ] && [ -e "$APPDIR/usr/bin/$1" ] ; then
+  MAIN="$APPDIR/usr/bin/$1" ; shift
+elif [ -e "$APPDIR/bin/$BINARY_NAME" ] ; then
+  MAIN="$APPDIR/bin/$BINARY_NAME"
+elif [ -e "$APPDIR/usr/bin/$BINARY_NAME" ] ; then
+  MAIN="$APPDIR/usr/bin/$BINARY_NAME"
+else
+  MAIN="$APPDIR/usr/bin/wine"
+fi
+
+# Use exec so we do not linger after the child exits (prevents the
+# parent shell from re-entering any logic above).
+if [ -z "$APPLICATION" ] ; then
+  exec "$MAIN" "$@"
+else
+  exec "$MAIN" "$APPLICATION"
+fi

@@ -1,0 +1,5 @@
+*.AppImage
+*.zsync
+extracted-*/
+squashfs-root*/
+runtime.bin
