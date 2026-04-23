@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------
-# Per-user launcher for wine-staging-fixed.AppImage
+# Shared launcher for wine-staging-fixed.AppImage
 #
-# Redirects the outer AppImage FUSE mount point from the global /tmp
-# (which causes multi-user permission conflicts when stale mount dirs
-# are owned by another user) to a per-user location under $HOME.
+# 可被多个用户共用：AppImage 放只读共享位置，挂载点/缓存/WINEPREFIX
+# 均展开到各自的 $XDG_RUNTIME_DIR / $HOME，互不干扰。
 #
-# Usage: wine-appimage-launcher.sh [args...]   (args forwarded to wine)
-# Env:
-#   WINE_APPIMAGE=<path>   override path to the fixed AppImage
+# AppImage 查找顺序：
+#   1. 环境变量 WINE_APPIMAGE
+#   2. 与本脚本同目录的 wine-staging-fixed.AppImage
+#   3. /opt/wine-staging-fixed.AppImage   （系统级共享安装位置）
+#
+# Usage: wine [args...]   (args forwarded to wine)
 # ------------------------------------------------------------------
 set -eu
 
-APPIMAGE="${WINE_APPIMAGE:-$(dirname "$(readlink -f "$0")")/wine-staging-fixed.AppImage}"
+_self_dir="$(dirname "$(readlink -f "$0")")"
+APPIMAGE="${WINE_APPIMAGE:-}"
+if [ -z "$APPIMAGE" ]; then
+    for _candidate in \
+        "$_self_dir/wine-staging-fixed.AppImage" \
+        "/opt/wine-staging-fixed.AppImage"; do
+        if [ -x "$_candidate" ]; then
+            APPIMAGE="$_candidate"
+            break
+        fi
+    done
+fi
 
 if [ ! -x "$APPIMAGE" ]; then
     echo "wine-appimage-launcher: AppImage not found or not executable: $APPIMAGE" >&2

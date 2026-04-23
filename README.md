@@ -68,44 +68,57 @@ exec "$APPIMAGE" "$@"
 ## 文件说明
 
 ```
-wine-appimage-work/
-├── wine-staging.AppImage          原版 staging 11.6（103 MB）
-├── wine-staging-fixed.AppImage    修复版（122 MB，mksquashfs 默认压缩）
-└── wine-appimage-launcher.sh      外层启动脚本（控制挂载路径）
+├── wrapper                    已修补的内层启动脚本（build.sh 打包进 AppImage）
+├── AppRun.env                 环境变量配置（参考）
+├── wine-appimage-launcher.sh  外层启动脚本（控制挂载路径 + 递归 guard）
+├── build.sh                   一键下载 → 打补丁 → 重打包
+├── install.sh                 系统级共享安装脚本（需要 root）
+└── README.md
 ```
 
-## 安装与使用
+`wine-staging-fixed.AppImage` 通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载。
+
+## 安装方式
+
+### 方式一：系统共享安装（推荐多用户场景）
+
+一份 AppImage + 一份 launcher，所有用户共用，各自的挂载点和数据完全隔离：
 
 ```bash
-# 1. 复制到目标位置
-cp wine-staging-fixed.AppImage  ~/.local/bin/wine-staging-fixed.AppImage
-cp wine-appimage-launcher.sh    ~/.local/bin/wine
-chmod +x ~/.local/bin/wine ~/.local/bin/wine-staging-fixed.AppImage
+# 下载 AppImage
+wget -O wine-staging-fixed.AppImage \
+  https://github.com/chaychuakip-a11y/wine/releases/download/v11.6-fixed/wine-staging-fixed.AppImage
 
-# 确保 ~/.local/bin 在 PATH 中
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# 一键安装（需要 root）
+sudo bash install.sh
 
-# 2. 运行（与原版用法完全兼容）
-wine notepad.exe
+# 任意用户直接使用
+wine foo.exe
 wine winecfg
 WINEPREFIX=~/.mywine wine setup.exe
 ```
 
-挂载点将在 `$XDG_RUNTIME_DIR/wine-appimage/`（通常 `/run/user/$UID/wine-appimage/`），随用户登出自动清理。
+安装后文件布局：
+```
+/opt/wine-staging-fixed.AppImage   AppImage 本体（root 只读，所有用户共享）
+/usr/local/bin/wine                launcher（所有用户共用同一个脚本）
+```
 
-## 多用户部署
+每个用户运行时各自拥有：
+| 目录 | 用途 |
+|------|------|
+| `/run/user/$UID/wine-appimage/` | FUSE 挂载点（登出自动清理） |
+| `~/.wine-appimage-staging/` | WINEPREFIX |
+| `~/.cache/wine-appimage-staging/` | DXVK 缓存等 |
 
-每个用户各自安装一份 launcher 即可，AppImage 本体可以共享只读位置：
+### 方式二：单用户安装
 
 ```bash
-# 管理员放到共享位置（只读）
-sudo cp wine-staging-fixed.AppImage /opt/wine-staging-fixed.AppImage
-sudo chmod 755 /opt/wine-staging-fixed.AppImage
-
-# 每个用户自行安装 launcher
-cp wine-appimage-launcher.sh ~/.local/bin/wine
-chmod +x ~/.local/bin/wine
-# launcher 会自动在自己的 $XDG_RUNTIME_DIR 下建立挂载目录
+mkdir -p ~/.local/bin
+cp wine-staging-fixed.AppImage  ~/.local/bin/
+cp wine-appimage-launcher.sh    ~/.local/bin/wine
+chmod +x ~/.local/bin/wine ~/.local/bin/wine-staging-fixed.AppImage
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```
 
 ## 回退原版
