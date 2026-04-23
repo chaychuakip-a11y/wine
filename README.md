@@ -1,158 +1,278 @@
 # wine-staging-fixed.AppImage
 
-基于 [mmtrt/WINE_AppImage](https://github.com/mmtrt/WINE_AppImage) staging 11.6 修复版，解决多用户权限冲突和 AppRun 递归执行问题。
+基于 [mmtrt/WINE_AppImage](https://github.com/mmtrt/WINE_AppImage) staging 11.6 的修复版，
+解决多用户共享场景下的权限冲突、变量缺失和递归执行三个问题。
 
-## 问题背景
+---
 
-### 1. `/tmp` 多用户冲突
+## 快速开始（内网）
 
-AppImage type-2 runtime 启动时在 `$TMPDIR`（默认 `/tmp`）下创建 `.mount_<名称><随机>` 挂载目录（权限 700）。多用户共享机器时：
+管理员将以下三个文件放到共享目录（例如 `/home/asrdictt/tyliu23/wine/`）：
 
-- 用户 A 的进程崩溃留下 `/tmp/.mount_wineXXXXXX`（属主 A，700 权限）
-- 用户 B 无法删除，下次启动若随机后缀碰撞则失败
-- `/tmp` 中残留大量孤儿目录
-
-### 2. `wrapper` 中 `$progHome` 未定义
-
-原版第 11 行：
-```bash
-export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}
 ```
-`$progHome` 从未定义，展开为空，实际路径变成 `/dxvk.conf`（根目录），普通用户无写权限。
-
-### 3. AppRun 递归执行
-
-以下场景会导致 AppRun 被反复触发，表现为一个 exe 跑完后又重跑：
-
-- AppImage 被放入 `$PATH` 且命名为 `wine`
-- 系统通过 `binfmt_misc` 把 `.exe` 注册给本 AppImage
-- wine/wineserver 派生子进程时通过 `$WINE` 或 xdg-open 再次解析到 AppImage
-- `"$MAIN" "$@"` 是 fork（非 exec），父 shell 退出后 AppImage unmount 再 mount
-
-## 修复内容
-
-### `wrapper`（内层，重打包进 AppImage）
-
-```diff
-+# Per-user state dir
-+progHome="${XDG_CACHE_HOME:-$HOME/.cache}/wine-appimage-staging"
-+mkdir -p "$progHome" 2>/dev/null
-+
-+# 递归 guard：已在 AppImage 树内则直接 exec wine，不重走挂载+setup
-+if [ "${__WINE_APPIMAGE_ACTIVE:-0}" = "1" ] && [ -x "$APPDIR/usr/bin/wine" ] ; then
-+    exec "$APPDIR/usr/bin/wine" "$@"
-+fi
-+export __WINE_APPIMAGE_ACTIVE=1
-+
- export WINE="$APPDIR/usr/bin/wine"
- ...
--export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}
-+export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}   # $progHome 现已定义
- ...
--"$MAIN" "$@"          # fork，父 shell 继续存活
-+"exec "$MAIN" "$@"    # exec，父 shell 被替换，无残留
+wine-staging-fixed.AppImage
+wine-appimage-launcher.sh
+install-user.sh
 ```
 
-### `wine-appimage-launcher.sh`（外层启动脚本）
-
-控制 AppImage runtime 挂载位置（无法在 AppImage 内部改）：
+每个用户各自执行一次安装：
 
 ```bash
-BASE="${XDG_RUNTIME_DIR:-$HOME/.cache}/wine-appimage"
-mkdir -p "$BASE" && chmod 700 "$BASE"
-export TMPDIR="$BASE"        # runtime 在此创建 .mount_*，每用户隔离
-export __WINE_APPIMAGE_LAUNCHER_ACTIVE=1
-exec "$APPIMAGE" "$@"
-```
-
-## 文件说明
-
-```
-├── wrapper                    已修补的内层启动脚本（build.sh 打包进 AppImage）
-├── AppRun.env                 环境变量配置（参考）
-├── wine-appimage-launcher.sh  外层启动脚本（控制挂载路径 + 递归 guard）
-├── build.sh                   一键下载 → 打补丁 → 重打包
-├── install.sh                 系统级共享安装脚本（需要 root）
-└── README.md
-```
-
-`wine-staging-fixed.AppImage` 通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载。
-
-## 安装
-
-### 单用户安装（无需 root，推荐）
-
-**内网环境**：从共享目录直接运行，脚本自动从同目录复制文件，不需要联网：
-
-```bash
-# 管理员将以下三个文件放到共享目录（如 NFS、U 盘、scp 等）
-#   wine-staging-fixed.AppImage
-#   wine-appimage-launcher.sh
-#   install-user.sh
-
-# 每个用户自行执行一次
-bash /共享路径/install-user.sh
+bash /home/asrdictt/tyliu23/wine/install-user.sh
 source ~/.bashrc
 ```
 
-**有网络**：一条命令搞定：
+之后直接使用：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/chaychuakip-a11y/wine/master/install-user.sh)
+wine foo.exe
+wine winecfg
 ```
 
-安装位置（均在 `$HOME` 下，不影响其他用户）：
+---
+
+## 安装详解
+
+### 安装过程做了什么
+
+`install-user.sh` 只操作当前用户的家目录，不需要 root，不影响其他用户：
+
+1. 将 `wine-staging-fixed.AppImage` 复制到 `~/.local/share/wine-appimage/`
+2. 将 `wine-appimage-launcher.sh` 安装为 `~/.local/bin/wine`
+3. 若 `~/.local/bin` 不在 `$PATH` 中，自动追加到 `~/.bashrc` / `~/.zshrc`
+
+安装完成后的文件布局：
 
 ```
-~/.local/share/wine-appimage/wine-staging-fixed.AppImage   AppImage 本体
-~/.local/bin/wine                                           launcher
+~/.local/
+├── bin/
+│   └── wine                          ← 启动脚本，用户直接调用的入口
+└── share/
+    └── wine-appimage/
+        └── wine-staging-fixed.AppImage
 ```
 
-运行时各用户私有目录：
+每次运行时，各用户私有的目录（自动创建，无需手动操作）：
 
-| 目录 | 用途 |
+| 目录 | 说明 |
 |------|------|
-| `/run/user/$UID/wine-appimage/` | FUSE 挂载点（登出自动清理） |
-| `~/.wine-appimage-staging/` | WINEPREFIX |
-| `~/.cache/wine-appimage-staging/` | DXVK 缓存等 |
+| `$XDG_RUNTIME_DIR/wine-appimage/`<br>（通常 `/run/user/$UID/wine-appimage/`） | AppImage FUSE 挂载点，登出后由系统自动清理。若系统无 `XDG_RUNTIME_DIR`，自动回退到 `~/.cache/wine-appimage/` |
+| `~/.wine-appimage-staging/` | WINEPREFIX，存放 Windows 注册表、C 盘文件等 |
+| `~/.cache/wine-appimage-staging/` | DXVK 缓存、shader 缓存等 |
 
-卸载：
+> 以上目录均在各用户自己的 `$HOME` 下，用户之间完全隔离，互不可见。
+
+### 卸载
 
 ```bash
-bash install-user.sh --uninstall
+bash ~/.local/share/wine-appimage/../../../  # 或直接：
+bash /home/asrdictt/tyliu23/wine/install-user.sh --uninstall
 ```
 
-### 系统共享安装（需要 root）
+卸载只删除 AppImage 和 launcher，**不会删除** `~/.wine-appimage-staging/`（Wine 数据）。
 
-一份 AppImage 所有用户共用，数据仍各自隔离：
+---
 
-```bash
-wget -O wine-staging-fixed.AppImage \
-  https://github.com/chaychuakip-a11y/wine/releases/download/v11.6-fixed/wine-staging-fixed.AppImage
-sudo bash install.sh        # 装到 /opt/ 和 /usr/local/bin/wine
-sudo bash install.sh --uninstall   # 卸载
-```
+## 日常使用
 
-## 回退原版
+### 基本用法
 
 ```bash
-# 直接运行原版（挂载回 /tmp，不含递归 guard）
-./wine-staging.AppImage notepad.exe
+# 打开 Wine 配置界面
+wine winecfg
 
-# 或用 APPIMAGE_EXTRACT_AND_RUN 跳过 FUSE（解压到临时目录运行，无 mount）
-APPIMAGE_EXTRACT_AND_RUN=1 ./wine-staging-fixed.AppImage notepad.exe
-```
+# 运行一个 exe
+wine /path/to/程序.exe
 
-## 验证
+# 运行带参数的程序
+wine /path/to/程序.exe --参数1 --参数2
 
-```bash
+# 查看 Wine 版本
 wine --version
-# wine-11.6 (Staging)
+# 输出：wine-11.6 (Staging)
+```
 
-# 确认挂载在 XDG_RUNTIME_DIR 而非 /tmp
+### 使用独立的 WINEPREFIX
+
+默认 WINEPREFIX 是 `~/.wine-appimage-staging/`，不同程序可以用独立的环境互不干扰：
+
+```bash
+# 为某个程序单独建一个 Wine 环境
+WINEPREFIX=~/.wine-myapp wine winecfg
+WINEPREFIX=~/.wine-myapp wine /path/to/程序.exe
+
+# 32 位程序专用环境
+WINEPREFIX=~/.wine-32bit WINEARCH=win32 wine winecfg
+WINEPREFIX=~/.wine-32bit wine /path/to/32bit程序.exe
+```
+
+### 调用 Wine 内置工具
+
+```bash
+# 控制面板 / 配置
+wine winecfg          # Wine 配置
+wine control          # Windows 控制面板
+wine regedit          # 注册表编辑器
+wine taskmgr          # 任务管理器
+wine uninstaller      # 添加/删除程序
+
+# 文件操作
+wine explorer         # 资源管理器
+wine notepad          # 记事本
+wine wordpad          # 写字板
+wine cmd              # Windows 命令行
+
+# wineserver 管理
+wineserver -k         # 终止当前 WINEPREFIX 的所有 Wine 进程
+wineserver -w         # 等待所有 Wine 进程结束
+```
+
+> 注意：`wineserver` 也由 launcher 管理，直接执行 `wineserver` 即可，无需指定路径。
+
+### 安装 Windows 软件
+
+```bash
+# 直接运行安装程序
+wine /path/to/setup.exe
+
+# 静默安装（部分程序支持）
+wine /path/to/setup.exe /S
+
+# 安装完成后，程序通常可以在 ~/.wine-appimage-staging/drive_c/ 下找到
+ls ~/.wine-appimage-staging/drive_c/Program\ Files/
+```
+
+### 常用环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WINEPREFIX` | `~/.wine-appimage-staging` | Wine 数据目录 |
+| `WINEARCH` | `win64` | Windows 架构，可设为 `win32` |
+| `WINEDEBUG` | `fixme-all` | 调试信息级别，`-all` 可完全静默 |
+| `DXVK_HUD` | `0` | DXVK 性能叠加层，`1` 开启 |
+| `DXVK_LOG_LEVEL` | `none` | DXVK 日志级别 |
+
+```bash
+# 示例：静默运行，使用独立前缀
+WINEPREFIX=~/.wine-game WINEDEBUG=-all wine game.exe
+
+# 示例：开启 DXVK 性能显示
+DXVK_HUD=1 wine game.exe
+```
+
+---
+
+## 问题排查
+
+### 确认挂载点不在 /tmp
+
+```bash
+wine winecfg &
+sleep 2
 mount | grep wine
-# .../wine-staging-fixed.AppImage on /run/user/1000/wine-appimage/.mount_wine-XXXXXX ...
+# 正常输出（挂载在用户私有目录）：
+# .../wine-staging-fixed.AppImage on /run/user/1001/wine-appimage/.mount_wine-XXXXXX ...
+#
+# 不应出现：
+# .../wine-staging-fixed.AppImage on /tmp/.mount_wine-XXXXXX ...
+```
 
-ls /tmp/.mount_wine* 2>&1
-# ls: 无法访问 '/tmp/.mount_wine*': 没有那个文件或目录
+### 清理残留的 Wine 进程
+
+```bash
+wineserver -k         # 优雅终止
+# 若无响应：
+pkill -u $USER wineserver
+pkill -u $USER wine
+```
+
+### 清理 WINEPREFIX 重新开始
+
+```bash
+rm -rf ~/.wine-appimage-staging
+wine winecfg   # 重新初始化
+```
+
+### 查看 Wine 运行日志
+
+```bash
+WINEDEBUG=+all wine 程序.exe 2>~/wine.log
+# 然后查看
+cat ~/wine.log | grep -i error
+```
+
+---
+
+## 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `wine-staging-fixed.AppImage` | 修复版 AppImage，通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载 |
+| `wine-appimage-launcher.sh` | 外层启动脚本，控制挂载路径和递归 guard |
+| `install-user.sh` | 单用户安装脚本（无需 root） |
+| `install.sh` | 系统级安装脚本（需要 root） |
+| `build.sh` | 从原版重新构建修复版的脚本 |
+| `wrapper` | 已修补的 AppImage 内层脚本（供 build.sh 使用） |
+| `AppRun.env` | AppImage 环境变量配置（参考） |
+
+---
+
+## 问题背景与修复原理
+
+### 问题 1：`/tmp` 多用户挂载冲突
+
+AppImage type-2 runtime 启动时在 `$TMPDIR`（默认 `/tmp`）下创建 `.mount_<名称><随机>` 挂载目录，权限为 700。多用户共享机器时：
+
+- 用户 A 的进程崩溃，留下 `/tmp/.mount_wineXXXXXX`（属主 A，700 权限）
+- 用户 B 无法删除该目录（无权限），导致 `/tmp` 中积累孤儿目录
+- 极端情况下随机后缀碰撞，新挂载失败
+
+**修复**：`wine-appimage-launcher.sh` 在启动 AppImage 前设置：
+
+```bash
+BASE="${XDG_RUNTIME_DIR:-$HOME/.cache}/wine-appimage"
+export TMPDIR="$BASE"
+```
+
+AppImage runtime 读取 `$TMPDIR` 决定挂载位置，从而将每个用户的挂载点隔离到各自的目录下。`XDG_RUNTIME_DIR`（`/run/user/$UID/`）由 systemd 按用户 ID 管理；若系统无此目录则回退到 `~/.cache/wine-appimage/`，两种情况均为用户私有，不会产生冲突。
+
+### 问题 2：`wrapper` 中 `$progHome` 未定义
+
+原版第 11 行引用了从未赋值的 `$progHome`：
+
+```bash
+export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}
+# $progHome 为空，实际展开为 /dxvk.conf（根目录），普通用户无写权限
+```
+
+**修复**：`wrapper` 头部增加定义：
+
+```bash
+progHome="${XDG_CACHE_HOME:-$HOME/.cache}/wine-appimage-staging"
+mkdir -p "$progHome" 2>/dev/null
+```
+
+### 问题 3：AppRun 递归执行
+
+以下情况会导致一个 exe 执行完后又被反复重启：
+
+- AppImage 被放入 `$PATH` 且命名为 `wine`
+- 系统通过 `binfmt_misc` 将 `.exe` 注册给本 AppImage
+- wine/wineserver 派生子进程时，通过环境变量 `$WINE` 或 xdg-open 再次解析到 AppImage，触发新的完整挂载流程
+- 原版 `"$MAIN" "$@"` 是 fork，父 shell 在 wine 退出后仍存活，可能触发后续逻辑
+
+**修复**：内外两层递归 guard：
+
+```bash
+# 外层 launcher：
+export __WINE_APPIMAGE_LAUNCHER_ACTIVE=1
+
+# 内层 wrapper：检测到已在 AppImage 内则直接 exec wine，跳过挂载和 setup
+if [ "${__WINE_APPIMAGE_ACTIVE:-0}" = "1" ] && [ -x "$APPDIR/usr/bin/wine" ]; then
+    exec "$APPDIR/usr/bin/wine" "$@"
+fi
+export __WINE_APPIMAGE_ACTIVE=1
+
+# 末尾改为 exec，父 shell 被替换，无残留
+exec "$MAIN" "$@"
 ```
