@@ -1,0 +1,37 @@
+name: Build CentOS 7 Wine AppImage
+
+on:
+  workflow_dispatch:   # 手动触发
+  push:
+    tags:
+      - 'v*'           # 推 tag 时自动触发并发 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许上传 Release 附件
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build wine-staging AppImage (inside CentOS 7 container)
+        run: bash build-centos7.sh
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}
+
+      - name: Upload artifact (for manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-staging-fixed-appimage
+          path: wine-staging-fixed.AppImage
+          retention-days: 7
+
+      - name: Upload to Release (for tag pushes)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wine-staging-fixed.AppImage
+          fail_on_unmatched_files: true
