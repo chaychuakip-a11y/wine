@@ -98,8 +98,8 @@ else
     while IFS= read -r f; do
         [ -e "$f" ] || [ -L "$f" ] || continue
         dst="$AD$f"
-        mkdir -p "$(dirname "$dst")"
-        cp -a "$f" "$dst" 2>/dev/null || true
+        mkdir -p "$(dirname "$dst")" || { echo "WARN: mkdir 失败: $(dirname "$dst")"; continue; }
+        cp -a "$f" "$dst" || echo "WARN: cp 失败: $f"
     done < /tmp/wine-files.txt
 
     # /usr/bin/wine 经过 alternatives 链：
