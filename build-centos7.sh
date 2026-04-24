@@ -61,16 +61,6 @@ echo "[信息] 安装 EPEL wine（glibc 2.17 兼容）..."
 yum install -y wine
 wine --version || true
 
-# === 诊断：安装结果 ===
-echo "--- wine 安装诊断 ---"
-rpm -qa | grep -i wine || true
-echo "which wine: $(which wine 2>/dev/null || echo 未找到)"
-file "$(which wine 2>/dev/null)" 2>/dev/null || true
-echo "/opt 内容:"; ls /opt/ 2>/dev/null || echo "(空)"
-echo "dll.so 文件数: $(find /usr /opt -name '*.dll.so' 2>/dev/null | wc -l)"
-find /usr /opt -name '*.dll.so' 2>/dev/null | head -5 || true
-echo "--- 诊断结束 ---"
-
 # 3. 确定 wine 前缀
 if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
 elif [ -d /opt/wine-stable  ]; then WPFX=/opt/wine-stable
@@ -89,11 +79,13 @@ if [ "$WPFX" != "/usr" ]; then
     # 保留原始目录结构，避免符号链接断链。
     mkdir -p "$AD$WPFX"
     cp -a "$WPFX/." "$AD$WPFX/"
-    # 同时在 usr/bin 建一层真实的符号链接，让 wrapper 能通过 $APPDIR/usr/bin/wine 找到
+    # 在 usr/bin 建相对符号链接，让 wrapper 能通过 $APPDIR/usr/bin/wine 找到
     for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
         _src="$WPFX/bin/$_bin"
         [ -e "$_src" ] || [ -L "$_src" ] || continue
-        ln -sf "$AD$_src" "$AD/usr/bin/$_bin" 2>/dev/null || \
+        # 用相对路径避免绝对路径在 AppImage 解包后断链
+        _rel="../../${WPFX#/}/bin/$_bin"
+        ln -sf "$_rel" "$AD/usr/bin/$_bin" 2>/dev/null || \
             cp -a "$_src" "$AD/usr/bin/$_bin" 2>/dev/null || true
     done
 else
