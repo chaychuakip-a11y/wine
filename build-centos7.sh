@@ -46,36 +46,41 @@ sed -i \
 # 基础工具（只用 CentOS 基础源，不需要 EPEL）
 yum install -y curl wget file which
 
-# ── 从 EPEL x86_64 目录直接下载 wine 包 ──────────────────────────────────
-# EPEL 7 的 i686 multilib 包存放在 x86_64 仓库的 Packages/w/ 里
-EPEL_W="https://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/w"
+# ── 从 EPEL x86_64 repodata 解析并下载 wine 包 ───────────────────────────
+# EPEL 7 不支持目录浏览；从 repodata/primary.xml.gz 找包的真实路径
+EPEL_BASE="https://dl.fedoraproject.org/pub/epel/7/x86_64"
 
-echo "[信息] 获取 EPEL Packages/w/ 目录列表..."
-_page=$(curl -fsSL "$EPEL_W/" 2>/dev/null)
-echo "$_page" | grep -oP 'wine[^"<> ]+\.rpm' | sort -u | head -30 || true
+echo "[信息] 下载 EPEL repomd.xml ..."
+curl -fsSL "$EPEL_BASE/repodata/repomd.xml" -o /tmp/repomd.xml
+cat /tmp/repomd.xml | grep -i primary || true
 
-# 找各包文件名
-_core_x64=$(echo "$_page" | grep -oP 'wine-core-[^"<> ]+\.x86_64\.rpm' | head -1)
-_core_i686=$(echo "$_page" | grep -oP 'wine-core-[^"<> ]+\.i686\.rpm'   | head -1)
-_fs=$(       echo "$_page" | grep -oP 'wine-filesystem-[^"<> ]+\.noarch\.rpm' | head -1)
-_common=$(   echo "$_page" | grep -oP 'wine-common-[^"<> ]+\.noarch\.rpm'     | head -1)
+# 从 repomd.xml 提取 primary.xml.gz 的相对路径
+_primary=$(grep -oP '(?<=href=")[^"]+' /tmp/repomd.xml | grep 'primary' | grep -v 'filelists\|other\|group' | head -1)
+echo "[信息] primary 路径: $_primary"
 
-echo "[信息] wine-core x86_64 : ${_core_x64:-(未找到)}"
-echo "[信息] wine-core i686   : ${_core_i686:-(未找到)}"
-echo "[信息] wine-filesystem  : ${_fs:-(未找到)}"
-echo "[信息] wine-common      : ${_common:-(未找到)}"
+curl -fsSL "$EPEL_BASE/$_primary" -o /tmp/primary.xml.gz
+yum install -y gzip 2>/dev/null || true
+
+# 从 primary.xml 中找 wine-core / wine-filesystem / wine-common 的 href
+echo "[信息] 搜索 wine 包路径..."
+gzip -dc /tmp/primary.xml.gz \
+    | grep -oP '(?<=href=")[^"]*wine-(core|filesystem|common)[^"]*\.rpm' \
+    | sort -u \
+    | tee /tmp/wine-hrefs.txt
+
+echo "[信息] 共找到 $(wc -l < /tmp/wine-hrefs.txt) 个 wine 包"
 
 # 下载
 mkdir -p /tmp/wine-rpms
-for _f in "$_core_x64" "$_core_i686" "$_fs" "$_common"; do
-    [ -n "$_f" ] || continue
-    echo "[信息] 下载 $_f ..."
-    curl -fsSL -o "/tmp/wine-rpms/$_f" "$EPEL_W/$_f"
-done
+while IFS= read -r _href; do
+    _fname=$(basename "$_href")
+    echo "[信息] 下载 $_fname ..."
+    curl -fsSL -o "/tmp/wine-rpms/$_fname" "$EPEL_BASE/$_href"
+done < /tmp/wine-hrefs.txt
 
 ls -lh /tmp/wine-rpms/
 
-# 安装（--nodeps 跳过依赖检查，AppImage 在目标机上运行时系统库由宿主提供）
+# 安装（--nodeps 跳过依赖检查，AppImage 在目标机运行时系统库由宿主提供）
 echo "[信息] 安装 wine RPM（--nodeps）..."
 rpm -ivh --nodeps --force /tmp/wine-rpms/*.rpm
 
