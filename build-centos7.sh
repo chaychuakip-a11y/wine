@@ -48,7 +48,9 @@ yum install -y curl wget file which
 
 # ── 从 EPEL x86_64 repodata 解析并下载 wine 包 ───────────────────────────
 # EPEL 7 不支持目录浏览；从 repodata/primary.xml.gz 找包的真实路径
-EPEL_BASE="https://dl.fedoraproject.org/pub/epel/7/x86_64"
+# EPEL 7 随 CentOS 7 一起归档，dl.fedoraproject.org 已 404
+# 需使用 archives.fedoraproject.org
+EPEL_BASE="https://archives.fedoraproject.org/pub/archive/epel/7/x86_64"
 
 echo "[信息] 下载 EPEL repomd.xml ..."
 curl -fsSL "$EPEL_BASE/repodata/repomd.xml" -o /tmp/repomd.xml
