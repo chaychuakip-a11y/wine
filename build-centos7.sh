@@ -53,7 +53,17 @@ sed -i \
     -e "s|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g" \
     /etc/yum.repos.d/CentOS-*.repo
 
-yum install -y epel-release
+# 直接写 EPEL repo，跳过 epel-release 包（Extras 源在 EOL 环境下不稳定）
+# $basearch 在 i386 容器内会解析为 i386
+cat > /etc/yum.repos.d/epel.repo << EPELEOF
+[epel]
+name=Extra Packages for Enterprise Linux 7 - \$basearch
+baseurl=https://dl.fedoraproject.org/pub/epel/7/\$basearch/
+failovermethod=priority
+enabled=1
+gpgcheck=0
+EPELEOF
+
 yum install -y wine
 
 echo "[信息] 32位容器内 wine --version:"
@@ -101,8 +111,16 @@ sed -i \
     -e 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
     /etc/yum.repos.d/CentOS-*.repo
 
-# 1. 基础依赖
-yum install -y epel-release
+# 1. 基础依赖（直接写 EPEL repo，跳过 epel-release 包）
+cat > /etc/yum.repos.d/epel.repo << 'EPELEOF'
+[epel]
+name=Extra Packages for Enterprise Linux 7 - $basearch
+baseurl=https://dl.fedoraproject.org/pub/epel/7/$basearch/
+failovermethod=priority
+enabled=1
+gpgcheck=0
+EPELEOF
+
 yum install -y curl wget file which
 
 # 2. 安装 64 位 wine
