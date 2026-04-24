@@ -60,10 +60,16 @@ sed -i \
     /etc/yum.repos.d/epel*.repo 2>/dev/null || true
 yum install -y curl wget file which
 
-# 2. WineHQ repo（RHEL 7 / CentOS 7）
-curl -fsSL -o /etc/yum.repos.d/winehq-rhel7.repo \
-    https://dl.winehq.org/wine-builds/rhel/7/winehq-rhel.repo
-rpm --import https://dl.winehq.org/wine-builds/winehq.key
+# 2. WineHQ repo（手动写入，.repo 文件 URL 已 404，centos/7 路径仍有效）
+rpm --import https://dl.winehq.org/wine-builds/winehq.key || true
+cat > /etc/yum.repos.d/winehq.repo << 'WINEREPEOF'
+[winehq]
+name=WineHQ builds for CentOS 7
+baseurl=https://dl.winehq.org/wine-builds/centos/7/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.winehq.org/wine-builds/winehq.key
+WINEREPEOF
 
 # 优先 wine-staging，不可用时回退 wine-stable
 yum install -y winehq-staging 2>/dev/null || {
