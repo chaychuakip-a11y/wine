@@ -24,6 +24,13 @@ export WINE="$APPDIR/usr/bin/wine"
 export WINEDEBUG=${WINEDEBUG:-"fixme-all"}
 export WINEPREFIX=${WINEPREFIX:-"$HOME/.wine-appimage-staging"}
 export WINESERVER="$APPDIR/usr/bin/wineserver"
+# 32位支持：若存在 wine32，让 wine64 能找到它
+if [ -x "$APPDIR/usr/bin/wine32" ]; then
+    export WINE32="$APPDIR/usr/bin/wine32"
+fi
+if [ -x "$APPDIR/usr/bin/wine32-preloader" ]; then
+    export WINELOADER32="$APPDIR/usr/bin/wine32-preloader"
+fi
 
 # DXVK env
 export DXVK_HUD=${DXVK_HUD:-"0"}
