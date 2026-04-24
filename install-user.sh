@@ -61,6 +61,13 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     fi
 done
 
+# ── 初始化 WINEPREFIX ─────────────────────────────────────────────
+echo ""
+echo "初始化 Wine 前缀（首次运行，约需 10-30 秒）..."
+WINEPREFIX="${WINEPREFIX:-$HOME/.wine-appimage-staging}" \
+    "$LAUNCHER_DEST" wineboot --init 2>/dev/null || true
+echo "✓ Wine 前缀初始化完成"
+
 echo ""
 echo "✓ 安装完成"
 echo "  重新加载 shell：source ~/.bashrc"
