@@ -109,6 +109,20 @@ else
         mkdir -p "$(dirname "$dst")"
         cp -a "$f" "$dst" 2>/dev/null || true
     done < /tmp/wine-files.txt
+
+    # /usr/bin/wine 经过 alternatives 链：
+    #   /usr/bin/wine -> /etc/alternatives/wine -> 实际二进制
+    # AppImage 内没有 /etc/alternatives/，把实际文件直接覆盖掉符号链接。
+    for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
+        _src="/usr/bin/$_bin"
+        [ -e "$_src" ] || continue
+        _real=$(readlink -f "$_src" 2>/dev/null)
+        if [ -n "$_real" ] && [ -f "$_real" ]; then
+            echo "[信息] 解析链接 $_src -> $_real"
+            cp -f "$_real" "$AD/usr/bin/$_bin"
+            chmod +x "$AD/usr/bin/$_bin"
+        fi
+    done
 fi
 
 # 5. 应用 wrapper 补丁（含 progHome 修复和递归 guard）
@@ -120,18 +134,8 @@ cat > "$AD/AppRun" << 'EOF'
 #!/usr/bin/env bash
 SELF="$(readlink -f "$0")"
 export APPDIR="$(dirname "$SELF")"
-# 支持 /opt/wine-staging 和 /opt/wine-stable 两种 WineHQ 安装路径
-_WPFX=""
-for _p in "$APPDIR/opt/wine-staging" "$APPDIR/opt/wine-stable"; do
-    [ -d "$_p" ] && { _WPFX="$_p"; break; }
-done
-if [ -n "$_WPFX" ]; then
-    export PATH="$_WPFX/bin:$APPDIR/usr/bin:$PATH"
-    export LD_LIBRARY_PATH="$_WPFX/lib:$_WPFX/lib64:$_WPFX/lib/wine:$_WPFX/lib64/wine:$APPDIR/usr/lib:$APPDIR/usr/lib64:${LD_LIBRARY_PATH:-}"
-else
-    export PATH="$APPDIR/usr/bin:$PATH"
-    export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:${LD_LIBRARY_PATH:-}"
-fi
+export PATH="$APPDIR/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:${LD_LIBRARY_PATH:-}"
 exec "$APPDIR/wrapper" "$@"
 EOF
 chmod +x "$AD/AppRun"
