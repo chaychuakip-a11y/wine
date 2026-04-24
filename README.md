@@ -7,26 +7,47 @@
 
 ## 快速开始（内网）
 
-管理员将以下三个文件放到共享目录（例如 `/home/asrdictt/tyliu23/wine/`）：
+### 第一步：构建 AppImage（在有网络、有 Docker 的构建机上执行一次）
+
+> 目标机器是 **CentOS 7（glibc 2.17）** 时，必须用此步骤重新构建，原版 AppImage 要求 glibc ≥ 2.25 无法运行。
+
+```bash
+# 构建机上只需要这两个文件（在同一目录）：
+#   build-centos7.sh
+#   wrapper
+
+bash build-centos7.sh
+# 产出：wine-staging-fixed.AppImage
+```
+
+在 Windows 构建机上（需 WSL2 + Docker Desktop）：
+```bash
+wsl
+cd /mnt/d/wine
+bash build-centos7.sh
+```
+
+### 第二步：部署到内网共享目录
+
+管理员将以下三个文件放到共享目录（例如 `/home/asrdictt/tyliu23/wine-share/`）：
 
 ```
-wine-staging-fixed.AppImage
+wine-staging-fixed.AppImage      ← 第一步构建产出
 wine-appimage-launcher.sh
 install-user.sh
 ```
 
-每个用户各自执行一次安装：
+> **注意**：脚本从 Windows 复制到 Linux 后需转换换行符，否则报 `$'\r'` 错误：
+> ```bash
+> sed -i 's/\r//' install-user.sh wine-appimage-launcher.sh
+> ```
+
+### 第三步：每位用户各自安装（无需 root）
 
 ```bash
-bash /home/asrdictt/tyliu23/wine/install-user.sh
+bash /home/asrdictt/tyliu23/wine-share/install-user.sh
 source ~/.bashrc
-```
-
-之后直接使用：
-
-```bash
-wine foo.exe
-wine winecfg
+wine --version
 ```
 
 ---
@@ -207,12 +228,13 @@ cat ~/wine.log | grep -i error
 
 | 文件 | 说明 |
 |------|------|
-| `wine-staging-fixed.AppImage` | 修复版 AppImage，通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载 |
-| `wine-appimage-launcher.sh` | 外层启动脚本，控制挂载路径和递归 guard |
+| `wine-staging-fixed.AppImage` | 修复版 AppImage，通过 [Release](https://github.com/chaychuakip-a11y/wine/releases/latest) 下载，或用 `build-centos7.sh` 自行构建 |
+| `wine-appimage-launcher.sh` | 外层启动脚本，控制挂载路径和递归 guard；无 FUSE 时自动切换 extract-and-run 模式 |
 | `install-user.sh` | 单用户安装脚本（无需 root） |
 | `install.sh` | 系统级安装脚本（需要 root） |
-| `build.sh` | 从原版重新构建修复版的脚本 |
-| `wrapper` | 已修补的 AppImage 内层脚本（供 build.sh 使用） |
+| `build.sh` | 从原版重新构建修复版的脚本（适用于 glibc ≥ 2.25 的系统） |
+| `build-centos7.sh` | **CentOS 7 专用**构建脚本，在 Docker 容器内用 WineHQ RPM 打包，兼容 glibc 2.17 |
+| `wrapper` | 已修补的 AppImage 内层脚本（供 build*.sh 使用） |
 | `AppRun.env` | AppImage 环境变量配置（参考） |
 
 ---

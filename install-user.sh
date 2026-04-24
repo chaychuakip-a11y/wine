@@ -8,7 +8,7 @@
 # 安装位置（均在 $HOME 下，不影响其他用户）：
 #   ~/.local/share/wine-appimage/wine-staging-fixed.AppImage
 #   ~/.local/bin/wine
-set -euo pipefail
+set -eu
 
 APPIMAGE_NAME="wine-staging-fixed.AppImage"
 LAUNCHER_NAME="wine-appimage-launcher.sh"

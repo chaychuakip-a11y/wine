@@ -19,6 +19,7 @@ APPIMAGE="${WINE_APPIMAGE:-}"
 if [ -z "$APPIMAGE" ]; then
     for _candidate in \
         "$_self_dir/wine-staging-fixed.AppImage" \
+        "$HOME/.local/share/wine-appimage/wine-staging-fixed.AppImage" \
         "/opt/wine-staging-fixed.AppImage"; do
         if [ -x "$_candidate" ]; then
             APPIMAGE="$_candidate"
@@ -42,6 +43,12 @@ chmod 700 "$BASE"
 # .mount_XXXXXX. Redirecting it to $BASE keeps every user's mount inside
 # their own $HOME/$XDG_RUNTIME_DIR and avoids /tmp cross-user issues.
 export TMPDIR="$BASE"
+
+# If FUSE is unavailable, fall back to extract-and-run mode.
+# This extracts the AppImage to a temp dir on first run (slower, but no FUSE needed).
+if ! fusermount --version >/dev/null 2>&1 && ! fusermount3 --version >/dev/null 2>&1; then
+    export APPIMAGE_EXTRACT_AND_RUN=1
+fi
 
 # Top-level recursion guard. The inner wrapper also has one, but we
 # short-circuit the whole outer runtime if we detect we are already
