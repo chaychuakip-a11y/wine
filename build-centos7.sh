@@ -30,9 +30,6 @@ echo ""
 INNER=$(mktemp /tmp/wine-build-inner.XXXXXX.sh)
 trap 'rm -f "$INNER"' EXIT
 
-# EPEL 7 i686 包实际存放在 x86_64 仓库目录（multilib），没有单独的 i386 仓库。
-# 用 curl 直接抓目录列表，找出 wine-core.*.x86_64.rpm 和 wine-core.*.i686.rpm，
-# 然后 rpm --nodeps 安装，完全绕过 yum 的架构解析。
 cat > "$INNER" << 'INNER_SCRIPT'
 #!/usr/bin/env bash
 set -ex
@@ -43,81 +40,89 @@ sed -i \
     -e 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
     /etc/yum.repos.d/CentOS-*.repo
 
-# 基础工具（只用 CentOS 基础源，不需要 EPEL）
-yum install -y curl wget file which
+# 基础工具 + 32位系统运行库（wine32 依赖）
+yum install -y curl file which gzip
+# 安装 i686 系统库；忽略失败（可能已内置）
+yum install -y \
+    glibc.i686 libstdc++.i686 libgcc.i686 \
+    zlib.i686 freetype.i686 libpng.i686 2>/dev/null || true
 
-# ── 从 EPEL x86_64 repodata 解析并下载 wine 包 ───────────────────────────
-# EPEL 7 不支持目录浏览；从 repodata/primary.xml.gz 找包的真实路径
-# EPEL 7 随 CentOS 7 一起归档，dl.fedoraproject.org 已 404
-# 需使用 archives.fedoraproject.org
-EPEL_BASE="https://archives.fedoraproject.org/pub/archive/epel/7/x86_64"
+# ── 从 EPEL repodata 解析并下载 wine RPM ────────────────────────────────
+# EPEL 7 x86_64 仓库只有 x86_64/noarch 包；i686 包在独立的 i386 仓库。
+# 两个仓库都需要。archives.fedoraproject.org 是 EPEL 7 归档地址。
+EPEL_X64="https://archives.fedoraproject.org/pub/archive/epel/7/x86_64"
+EPEL_I386="https://archives.fedoraproject.org/pub/archive/epel/7/i386"
 
-yum install -y gzip yum-utils 2>/dev/null || true
+mkdir -p /tmp/wine-rpms
 
-echo "[信息] 下载 EPEL repomd.xml ..."
-curl -fsSL "$EPEL_BASE/repodata/repomd.xml" -o /tmp/repomd.xml || {
-    echo "[错误] 无法访问 $EPEL_BASE/repodata/repomd.xml" >&2; exit 1
+# 函数：从指定 EPEL repo 下载 wine 包
+# 用法: fetch_wine_pkgs <base_url> <tag> <pkg_filter_regex>
+fetch_wine_pkgs() {
+    local base="$1" tag="$2" filter="$3"
+    echo "[信息] [$tag] 获取 repomd.xml ..."
+    curl -fsSL "$base/repodata/repomd.xml" -o "/tmp/repomd-${tag}.xml" || {
+        echo "[警告] [$tag] 无法访问 $base，跳过" >&2; return 0
+    }
+    local _primary
+    _primary=$(grep -oP '(?<=href=")[^"]+' "/tmp/repomd-${tag}.xml" \
+        | grep 'primary' | grep -v 'filelists\|other\|group' | head -1)
+    echo "[信息] [$tag] primary: $_primary"
+    curl -fsSL "$base/$_primary" -o "/tmp/primary-${tag}.xml.gz"
+
+    echo "[诊断] [$tag] 所有 wine*.rpm:"
+    gzip -dc "/tmp/primary-${tag}.xml.gz" \
+        | grep -oP '(?<=href=")[^"]*wine[^"]*\.rpm' \
+        | sort -u | tee "/tmp/wine-all-${tag}.txt"
+    echo "[诊断] [$tag] 共 $(wc -l < "/tmp/wine-all-${tag}.txt") 个包"
+
+    grep -P "$filter" "/tmp/wine-all-${tag}.txt" > "/tmp/wine-dl-${tag}.txt" || true
+    echo "[信息] [$tag] 筛选后 $(wc -l < "/tmp/wine-dl-${tag}.txt") 个包待下载"
+
+    while IFS= read -r _href; do
+        local _fname
+        _fname=$(basename "$_href")
+        echo "[信息] [$tag] 下载 $_fname ..."
+        curl -fsSL -o "/tmp/wine-rpms/$_fname" "$base/$_href"
+    done < "/tmp/wine-dl-${tag}.txt"
 }
 
-# 从 repomd.xml 提取 primary.xml.gz 的相对路径
-_primary=$(grep -oP '(?<=href=")[^"]+' /tmp/repomd.xml | grep 'primary' | grep -v 'filelists\|other\|group' | head -1)
-echo "[信息] primary 路径: $_primary"
+# x86_64：wine-core, wine-filesystem, wine-common (noarch)
+fetch_wine_pkgs "$EPEL_X64" "x64" \
+    'wine-(core|filesystem|common)\b.*\.(x86_64|noarch)\.rpm'
 
-curl -fsSL "$EPEL_BASE/$_primary" -o /tmp/primary.xml.gz
-
-# 列出 repodata 里所有 wine 包（完整输出，帮助判断是否有 i686）
-echo "[诊断] repodata 中所有 wine*.rpm 条目:"
-gzip -dc /tmp/primary.xml.gz \
-    | grep -oP '(?<=href=")[^"]*wine[^"]*\.rpm' \
-    | sort -u \
-    | tee /tmp/wine-all-hrefs.txt
-
-echo "[诊断] 共 $(wc -l < /tmp/wine-all-hrefs.txt) 个 wine 相关包"
-
-# 筛选需要的包
-grep -P 'wine-(core|filesystem|common)' /tmp/wine-all-hrefs.txt > /tmp/wine-hrefs.txt || true
-echo "[信息] 筛选后 $(wc -l < /tmp/wine-hrefs.txt) 个包待下载"
-
-# 下载
-mkdir -p /tmp/wine-rpms
-while IFS= read -r _href; do
-    _fname=$(basename "$_href")
-    echo "[信息] 下载 $_fname ..."
-    curl -fsSL -o "/tmp/wine-rpms/$_fname" "$EPEL_BASE/$_href"
-done < /tmp/wine-hrefs.txt
+# i386：wine-core.i686, wine-filesystem.i686（wine32 本体）
+# common 是 noarch，x64 那边已经下了，不用重复
+fetch_wine_pkgs "$EPEL_I386" "i386" \
+    'wine-(core|filesystem)\b.*\.i686\.rpm'
 
 ls -lh /tmp/wine-rpms/
 
-# 安装（--nodeps 跳过依赖检查）
-echo "[信息] 安装 wine RPM（--nodeps）..."
+# 安装所有 RPM（--nodeps 跳过依赖，--force 允许多架构并存）
+echo "[信息] 安装 wine RPM（--nodeps --force）..."
 rpm -ivh --nodeps --force /tmp/wine-rpms/*.rpm
 
-# rpm --nodeps 不执行 %post 脚本，alternatives 软链不会自动创建
-# 手动找到实际二进制并建立软链
-echo "[诊断] 安装后搜索所有 wine 可执行文件:"
+# 诊断：查看安装结果
+echo "[诊断] 安装后所有 wine 可执行文件:"
 find /usr -name '*wine*' \( -type f -o -type l \) 2>/dev/null | sort | tee /tmp/wine-bins.txt
-
-echo "[诊断] 各 wine 包内容（前10行）:"
-rpm -qa | grep -i wine | while read -r _pkg; do
-    echo "  === $_pkg ==="
-    rpm -ql "$_pkg" 2>/dev/null | head -10
-done
-
-# 建立 wine 二进制软链（跳过 alternatives）
-for _bin in wine wine64 wine32 wine32-preloader wine-preloader wineserver wineboot winecfg; do
-    _real=$(find /usr -name "$_bin" -type f 2>/dev/null | head -1)
-    [ -n "$_real" ] || continue
-    [ -e "/usr/bin/$_bin" ] && continue   # 已存在则跳过
-    ln -sf "$_real" "/usr/bin/$_bin"
-    echo "[信息] 建立软链: /usr/bin/$_bin -> $_real"
-done
 
 echo "[信息] 已安装包:"
 rpm -qa | grep -i wine | sort
 echo "[信息] 64位 DLL: $(find /usr/lib64/wine -name '*.dll.so' 2>/dev/null | wc -l) 个"
 echo "[信息] 32位 DLL: $(find /usr/lib/wine  -name '*.dll.so' 2>/dev/null | wc -l) 个"
-echo "[信息] wine 二进制:"
-ls -la /usr/bin/wine* /usr/lib/wine/wine* 2>/dev/null || echo "  (none)"
+
+# 建立 wine 二进制软链（rpm --nodeps 不执行 %post，alternatives 不会跑）
+for _bin in wine wine64 wine32 wine32-preloader wine-preloader wineserver wineboot winecfg; do
+    _real=$(find /usr -name "$_bin" -type f 2>/dev/null | head -1)
+    [ -n "$_real" ] || continue
+    [ -e "/usr/bin/$_bin" ] && continue
+    ln -sf "$_real" "/usr/bin/$_bin"
+    echo "[信息] 软链: /usr/bin/$_bin -> $_real"
+done
+
+echo "[信息] wine 二进制汇总:"
+for _b in /usr/bin/wine /usr/bin/wine64 /usr/bin/wine32; do
+    [ -e "$_b" ] && file "$_b" || echo "  $_b: 不存在"
+done
 
 # ── 构建 AppDir ──────────────────────────────────────────────────────────
 AD=/tmp/AppDir
@@ -135,7 +140,7 @@ while IFS= read -r f; do
     cp -a "$f" "$dst" || echo "WARN: cp $f"
 done < /tmp/wine-files.txt
 
-# 解析 alternatives 软链（/usr/bin/wine → /etc/alternatives/wine → 实际二进制）
+# 解析 alternatives 软链 → 复制真实二进制（不留悬空软链）
 for _bin in wine wine64 wine32 wine32-preloader wine-preloader wineserver wineboot winecfg; do
     _src="/usr/bin/$_bin"
     [ -e "$_src" ] || continue
@@ -145,6 +150,25 @@ for _bin in wine wine64 wine32 wine32-preloader wine-preloader wineserver winebo
         cp "$_real" "$AD/usr/bin/$_bin" && chmod +x "$AD/usr/bin/$_bin"
         echo "[信息] 解析 $_src -> $_real"
     fi
+done
+
+# ── 打包 32 位系统运行库（目标机可能没装 glibc.i686）────────────────────
+# wine32 是 i386 ELF，依赖 32 位 libc/libstdc++ 等；把容器里的一并打进去。
+echo "[信息] 打包 32 位系统运行库..."
+_lib32_dirs="/lib /usr/lib"
+for _pattern in \
+        libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 \
+        libz.so.1 ld-linux.so.2 \
+        libstdc++.so.6 libgcc_s.so.1 \
+        libfreetype.so.6 libpng15.so.15 libpng16.so.16; do
+    for _dir in $_lib32_dirs; do
+        # 匹配所有版本（如 libc.so.6.x.y）
+        for _f in "$_dir"/${_pattern}*; do
+            [ -e "$_f" ] || [ -L "$_f" ] || continue
+            cp -a "$_f" "$AD/usr/lib/" 2>/dev/null \
+                && echo "[信息]  lib32: $_f" || true
+        done
+    done
 done
 
 # wrapper
@@ -157,7 +181,23 @@ cat > "$AD/AppRun" << 'EOF'
 SELF="$(readlink -f "$0")"
 export APPDIR="$(dirname "$SELF")"
 export PATH="$APPDIR/usr/bin:$PATH"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:$APPDIR/usr/lib/wine/i386-unix:${LD_LIBRARY_PATH:-}"
+# 64 位 ELF 加载路径
+export LD_LIBRARY_PATH="\
+$APPDIR/usr/lib64:\
+$APPDIR/usr/lib64/wine:\
+$APPDIR/usr/lib64/wine/x86_64-unix:\
+${LD_LIBRARY_PATH:-}"
+# 32 位 wine DLL 搜索路径
+export WINEDLLPATH="$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine"
+# wine32 二进制使用 AppDir 内的 32 位系统库（覆盖系统路径）
+export WINELOADER="$APPDIR/usr/bin/wine"
+# 让 wine32 preloader 能找到 AppDir 内的 i686 系统库
+# 32 位 ELF 使用的是 /lib/ld-linux.so.2，LD_LIBRARY_PATH 对它同样生效
+export LD_LIBRARY_PATH="\
+$APPDIR/usr/lib:\
+$APPDIR/usr/lib/wine:\
+$APPDIR/usr/lib/wine/i386-unix:\
+$LD_LIBRARY_PATH"
 exec "$APPDIR/wrapper" "$@"
 EOF
 chmod +x "$AD/AppRun"
