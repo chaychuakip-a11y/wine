@@ -78,7 +78,7 @@ if [ "$WPFX" != "/usr" ]; then
     # /opt/wine-* 路径：把整个 prefix 原样复制到 AppDir 的相同位置，
     # 保留原始目录结构，避免符号链接断链。
     mkdir -p "$AD$WPFX"
-    cp -a "$WPFX/." "$AD$WPFX/"
+    cp -a "$WPFX/." "$AD$WPFX/" || { echo "ERROR: 复制 $WPFX 失败，磁盘可能已满" >&2; exit 1; }
     # 在 usr/bin 建相对符号链接，让 wrapper 能通过 $APPDIR/usr/bin/wine 找到
     for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
         _src="$WPFX/bin/$_bin"
@@ -111,8 +111,8 @@ else
         _real=$(readlink -f "$_src" 2>/dev/null)
         if [ -n "$_real" ] && [ -f "$_real" ]; then
             echo "[信息] 解析链接 $_src -> $_real"
-            rm -f "$AD/usr/bin/$_bin"          # 先删掉已复制进来的符号链接
-            cp "$_real" "$AD/usr/bin/$_bin"    # 再写入实体文件
+            rm -f "$AD/usr/bin/$_bin"                                   # 先删掉已复制进来的符号链接
+            cp "$_real" "$AD/usr/bin/$_bin" || { echo "WARN: cp 失败: $_real"; continue; }
             chmod +x "$AD/usr/bin/$_bin"
         fi
     done
