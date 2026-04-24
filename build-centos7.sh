@@ -72,15 +72,29 @@ AD=/tmp/AppDir
 mkdir -p "$AD/usr/bin" "$AD/usr/lib" "$AD/usr/lib64" \
          "$AD/usr/share/wine" "$AD/usr/libexec"
 
+# EPEL wine 把实体文件装到 /opt/wine-staging（或 /opt/wine-stable），
+# /usr/bin/wine 只是指向那里的符号链接。
+# 重新探测：优先使用 /opt/wine-* 实体目录。
+if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
+elif [ -d /opt/wine-stable  ]; then WPFX=/opt/wine-stable
+else                                 WPFX=/usr
+fi
+echo "[信息] wine 前缀: $WPFX"
+
 if [ "$WPFX" != "/usr" ]; then
-    # WineHQ（/opt/wine-*）：整个 prefix 直接复制
-    cp -a "$WPFX/bin/."    "$AD/usr/bin/"
-    [ -d "$WPFX/lib"     ] && cp -a "$WPFX/lib/."     "$AD/usr/lib/"
-    [ -d "$WPFX/lib64"   ] && cp -a "$WPFX/lib64/."   "$AD/usr/lib64/"
-    [ -d "$WPFX/libexec" ] && cp -a "$WPFX/libexec/." "$AD/usr/libexec/"
-    [ -d "$WPFX/share/wine" ] && cp -a "$WPFX/share/wine/." "$AD/usr/share/wine/"
+    # /opt/wine-* 路径：把整个 prefix 原样复制到 AppDir 的相同位置，
+    # 保留原始目录结构，避免符号链接断链。
+    mkdir -p "$AD$WPFX"
+    cp -a "$WPFX/." "$AD$WPFX/"
+    # 同时在 usr/bin 建一层真实的符号链接，让 wrapper 能通过 $APPDIR/usr/bin/wine 找到
+    for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
+        _src="$WPFX/bin/$_bin"
+        [ -e "$_src" ] || [ -L "$_src" ] || continue
+        ln -sf "$AD$_src" "$AD/usr/bin/$_bin" 2>/dev/null || \
+            cp -a "$_src" "$AD/usr/bin/$_bin" 2>/dev/null || true
+    done
 else
-    # EPEL wine（/usr）：用 rpm -ql 精确收集，避免把整个 /usr 打进去
+    # 纯 /usr 安装：用 rpm -ql 精确收集
     echo "[信息] 收集 wine rpm 文件列表..."
     rpm -qa | grep -i wine | xargs -r rpm -ql 2>/dev/null \
         | grep -v '(contains no files)' | sort -u > /tmp/wine-files.txt
@@ -92,15 +106,6 @@ else
         mkdir -p "$(dirname "$dst")"
         cp -a "$f" "$dst" 2>/dev/null || true
     done < /tmp/wine-files.txt
-
-    # 补充 libwine*.so 共享库（rpm 文件列表有时不含所有 .so 软链接）
-    find /usr/lib /usr/lib64 -maxdepth 2 \
-        \( -name 'libwine*' -o -name 'libwine*.so*' \) 2>/dev/null | \
-    while IFS= read -r lib; do
-        dst="$AD$lib"
-        mkdir -p "$(dirname "$dst")"
-        cp -a "$lib" "$dst" 2>/dev/null || true
-    done
 fi
 
 # 5. 应用 wrapper 补丁（含 progHome 修复和递归 guard）
@@ -112,8 +117,18 @@ cat > "$AD/AppRun" << 'EOF'
 #!/usr/bin/env bash
 SELF="$(readlink -f "$0")"
 export APPDIR="$(dirname "$SELF")"
-export PATH="$APPDIR/usr/bin:$PATH"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:${LD_LIBRARY_PATH:-}"
+# 支持 /opt/wine-staging 和 /opt/wine-stable 两种 WineHQ 安装路径
+_WPFX=""
+for _p in "$APPDIR/opt/wine-staging" "$APPDIR/opt/wine-stable"; do
+    [ -d "$_p" ] && { _WPFX="$_p"; break; }
+done
+if [ -n "$_WPFX" ]; then
+    export PATH="$_WPFX/bin:$APPDIR/usr/bin:$PATH"
+    export LD_LIBRARY_PATH="$_WPFX/lib:$_WPFX/lib64:$_WPFX/lib/wine:$_WPFX/lib64/wine:$APPDIR/usr/lib:$APPDIR/usr/lib64:${LD_LIBRARY_PATH:-}"
+else
+    export PATH="$APPDIR/usr/bin:$PATH"
+    export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:${LD_LIBRARY_PATH:-}"
+fi
 exec "$APPDIR/wrapper" "$@"
 EOF
 chmod +x "$AD/AppRun"
