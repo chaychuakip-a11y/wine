@@ -82,7 +82,7 @@ if [ "$WPFX" != "/usr" ]; then
 else
     # EPEL wine（/usr）：用 rpm -ql 精确收集，避免把整个 /usr 打进去
     echo "[信息] 收集 wine rpm 文件列表..."
-    rpm -qa | grep -i wine | xargs rpm -ql 2>/dev/null \
+    rpm -qa | grep -i wine | xargs -r rpm -ql 2>/dev/null \
         | grep -v '(contains no files)' | sort -u > /tmp/wine-files.txt
     echo "[信息] 共 $(wc -l < /tmp/wine-files.txt) 个文件"
 

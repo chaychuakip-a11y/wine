@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # ------------------------------------------------------------------
 # Per-user state dir (replaces undefined $progHome and /tmp hardcoding)
 # ------------------------------------------------------------------
