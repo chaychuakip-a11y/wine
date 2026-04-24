@@ -59,9 +59,19 @@ yum install -y curl wget file which
 #    EPEL wine 在 CentOS 7 构建，天然兼容 glibc 2.17。
 echo "[信息] 安装 EPEL wine（glibc 2.17 兼容）..."
 yum install -y wine
-wine --version
+wine --version || true
 
-# 3. 确定 wine 前缀（EPEL 安装到 /usr，WineHQ 安装到 /opt/wine-*）
+# === 诊断：安装结果 ===
+echo "--- wine 安装诊断 ---"
+rpm -qa | grep -i wine || true
+echo "which wine: $(which wine 2>/dev/null || echo 未找到)"
+file "$(which wine 2>/dev/null)" 2>/dev/null || true
+echo "/opt 内容:"; ls /opt/ 2>/dev/null || echo "(空)"
+echo "dll.so 文件数: $(find /usr /opt -name '*.dll.so' 2>/dev/null | wc -l)"
+find /usr /opt -name '*.dll.so' 2>/dev/null | head -5 || true
+echo "--- 诊断结束 ---"
+
+# 3. 确定 wine 前缀
 if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
 elif [ -d /opt/wine-stable  ]; then WPFX=/opt/wine-stable
 else                                 WPFX=/usr
@@ -72,13 +82,6 @@ AD=/tmp/AppDir
 mkdir -p "$AD/usr/bin" "$AD/usr/lib" "$AD/usr/lib64" \
          "$AD/usr/share/wine" "$AD/usr/libexec"
 
-# EPEL wine 把实体文件装到 /opt/wine-staging（或 /opt/wine-stable），
-# /usr/bin/wine 只是指向那里的符号链接。
-# 重新探测：优先使用 /opt/wine-* 实体目录。
-if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
-elif [ -d /opt/wine-stable  ]; then WPFX=/opt/wine-stable
-else                                 WPFX=/usr
-fi
 echo "[信息] wine 前缀: $WPFX"
 
 if [ "$WPFX" != "/usr" ]; then
