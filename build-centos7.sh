@@ -126,9 +126,12 @@ EPELEOF
 
 yum install -y curl wget file which
 
-# 安装 64 位 wine
+# 安装 64 位 wine（multilib_policy=best 禁止 yum 拉取 i686 依赖，避免找不到 EPEL i386）
 echo "[阶段2] 安装 wine.x86_64 ..."
-yum install -y wine
+yum install -y wine \
+    --setopt=multilib_policy=best \
+    --exclude='*.i686' \
+    --exclude='*.i386'
 wine --version || true
 echo "[阶段2] 64位 DLL: $(find /usr/lib64/wine -name '*.dll.so' 2>/dev/null | wc -l) 个"
 
