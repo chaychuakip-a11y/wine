@@ -52,25 +52,31 @@ yum install -y curl wget file which
 # 需使用 archives.fedoraproject.org
 EPEL_BASE="https://archives.fedoraproject.org/pub/archive/epel/7/x86_64"
 
+yum install -y gzip yum-utils 2>/dev/null || true
+
 echo "[信息] 下载 EPEL repomd.xml ..."
-curl -fsSL "$EPEL_BASE/repodata/repomd.xml" -o /tmp/repomd.xml
-cat /tmp/repomd.xml | grep -i primary || true
+curl -fsSL "$EPEL_BASE/repodata/repomd.xml" -o /tmp/repomd.xml || {
+    echo "[错误] 无法访问 $EPEL_BASE/repodata/repomd.xml" >&2; exit 1
+}
 
 # 从 repomd.xml 提取 primary.xml.gz 的相对路径
 _primary=$(grep -oP '(?<=href=")[^"]+' /tmp/repomd.xml | grep 'primary' | grep -v 'filelists\|other\|group' | head -1)
 echo "[信息] primary 路径: $_primary"
 
 curl -fsSL "$EPEL_BASE/$_primary" -o /tmp/primary.xml.gz
-yum install -y gzip 2>/dev/null || true
 
-# 从 primary.xml 中找 wine-core / wine-filesystem / wine-common 的 href
-echo "[信息] 搜索 wine 包路径..."
+# 列出 repodata 里所有 wine 包（完整输出，帮助判断是否有 i686）
+echo "[诊断] repodata 中所有 wine*.rpm 条目:"
 gzip -dc /tmp/primary.xml.gz \
-    | grep -oP '(?<=href=")[^"]*wine-(core|filesystem|common)[^"]*\.rpm' \
+    | grep -oP '(?<=href=")[^"]*wine[^"]*\.rpm' \
     | sort -u \
-    | tee /tmp/wine-hrefs.txt
+    | tee /tmp/wine-all-hrefs.txt
 
-echo "[信息] 共找到 $(wc -l < /tmp/wine-hrefs.txt) 个 wine 包"
+echo "[诊断] 共 $(wc -l < /tmp/wine-all-hrefs.txt) 个 wine 相关包"
+
+# 筛选需要的包
+grep -P 'wine-(core|filesystem|common)' /tmp/wine-all-hrefs.txt > /tmp/wine-hrefs.txt || true
+echo "[信息] 筛选后 $(wc -l < /tmp/wine-hrefs.txt) 个包待下载"
 
 # 下载
 mkdir -p /tmp/wine-rpms
@@ -82,9 +88,29 @@ done < /tmp/wine-hrefs.txt
 
 ls -lh /tmp/wine-rpms/
 
-# 安装（--nodeps 跳过依赖检查，AppImage 在目标机运行时系统库由宿主提供）
+# 安装（--nodeps 跳过依赖检查）
 echo "[信息] 安装 wine RPM（--nodeps）..."
 rpm -ivh --nodeps --force /tmp/wine-rpms/*.rpm
+
+# rpm --nodeps 不执行 %post 脚本，alternatives 软链不会自动创建
+# 手动找到实际二进制并建立软链
+echo "[诊断] 安装后搜索所有 wine 可执行文件:"
+find /usr -name '*wine*' \( -type f -o -type l \) 2>/dev/null | sort | tee /tmp/wine-bins.txt
+
+echo "[诊断] 各 wine 包内容（前10行）:"
+rpm -qa | grep -i wine | while read -r _pkg; do
+    echo "  === $_pkg ==="
+    rpm -ql "$_pkg" 2>/dev/null | head -10
+done
+
+# 建立 wine 二进制软链（跳过 alternatives）
+for _bin in wine wine64 wine32 wine32-preloader wine-preloader wineserver wineboot winecfg; do
+    _real=$(find /usr -name "$_bin" -type f 2>/dev/null | head -1)
+    [ -n "$_real" ] || continue
+    [ -e "/usr/bin/$_bin" ] && continue   # 已存在则跳过
+    ln -sf "$_real" "/usr/bin/$_bin"
+    echo "[信息] 建立软链: /usr/bin/$_bin -> $_real"
+done
 
 echo "[信息] 已安装包:"
 rpm -qa | grep -i wine | sort
