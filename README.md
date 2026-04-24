@@ -276,35 +276,22 @@ mkdir -p "$progHome" 2>/dev/null
 
 ---
 
-## 当前已知问题（进行中）
+## 问题背景与修复原理
 
-### 问题 4：AppImage 内缺少 wine32（32 位程序无法运行）
+### 问题 4（已修复）：AppImage 内缺少 wine32（32 位程序无法运行）
 
-**现象**：打包完成后，AppDir 内只有 `wine64`（x86_64 ELF），没有 `wine`（i386 ELF）和 `/usr/lib/wine/*.dll.so`。运行 32 位 Windows 程序时报错：
+**现象**：只有 wine64，运行 32 位 exe 报错 `wine32 not found`。
 
-```
-wine: '/usr/bin/wine32' not found, required for 32-bit applications.
-```
+**根本原因**：原构建脚本使用 EPEL 7 x86_64 仓库，该仓库从不包含 i686 包，且 WineHQ 已不再维护 CentOS/RHEL 7 仓库。
 
-**根本原因**：`build-centos7.sh` 原先只从 EPEL 7 **x86_64 仓库**下载包。该仓库仅包含 x86_64/noarch 架构，i686 wine 包（`wine-core.i686`、`wine-filesystem.i686`）存放在独立的 **i386 仓库**（`/pub/archive/epel/7/i386/`），需要分开获取。
+**修复**：`build-centos7.sh` 改用 **Ubuntu 20.04 + WineHQ Ubuntu 仓库**作为构建环境。WineHQ 在 Ubuntu 上同时提供 `wine-staging-amd64`（64位）和 `wine-staging-i386:i386`（32位），32位系统运行库（`libc.so.6`、`libstdc++.so.6` 等）一并捆绑进 AppDir，目标机无需安装任何 i386 包。产出的 AppImage 通过 AppImage type-2 runtime 的 compat 层兼容 glibc ≥ 2.17（CentOS 7）。
 
-**修复方案**（已合入 `build-centos7.sh`，下次构建生效）：
-
-1. 新增从 `https://archives.fedoraproject.org/pub/archive/epel/7/i386` 解析 repodata，下载 `wine-core.i686` 和 `wine-filesystem.i686`
-2. 构建容器内安装 `glibc.i686 libstdc++.i686 libgcc.i686 zlib.i686 freetype.i686`，并将这些 32 位系统运行库一并打包进 `AppDir/usr/lib/`，避免目标机缺 i686 glibc 时 wine32 无法启动
-3. AppRun 的 `LD_LIBRARY_PATH` 拆分为 64 位路径和 32 位路径分层叠加，增加 `WINEDLLPATH` 变量
-
-**构建完成后验证 wine32 是否正常**：
+验证：
 
 ```bash
-# 方法一：解包后查看文件（Windows 上用 7-Zip，Linux 上用下面命令）
-APPIMAGE_EXTRACT_AND_RUN=1 ./wine-staging-fixed.AppImage --appimage-extract
-file squashfs-root/usr/bin/wine          # 期望: ELF 32-bit
-ls squashfs-root/usr/lib/wine/ | wc -l  # 期望: 非 0（32 位 DLL 数量）
-
-# 方法二：直接运行
-APPIMAGE_EXTRACT_AND_RUN=1 ./wine-staging-fixed.AppImage wine --version
-APPIMAGE_EXTRACT_AND_RUN=1 ./wine-staging-fixed.AppImage wine64 --version
+wine winecfg        # 64 位配置界面
+wine notepad.exe    # 64 位程序
+wine old32bit.exe   # 32 位程序（现在可以运行）
 ```
 
 ---
