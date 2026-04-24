@@ -53,32 +53,15 @@ sed -i \
 
 # 1. 基础依赖
 yum install -y epel-release
-# EPEL 在 vault 时代也需要指定镜像
-sed -i \
-    -e 's|^mirrorlist=|#mirrorlist=|g' \
-    -e 's|^#baseurl=https\?://download.fedoraproject.org/pub/epel|baseurl=https://archives.fedoraproject.org/pub/archive/epel|g' \
-    /etc/yum.repos.d/epel*.repo 2>/dev/null || true
 yum install -y curl wget file which
 
-# 2. WineHQ repo（手动写入，.repo 文件 URL 已 404，centos/7 路径仍有效）
-rpm --import https://dl.winehq.org/wine-builds/winehq.key || true
-cat > /etc/yum.repos.d/winehq.repo << 'WINEREPEOF'
-[winehq]
-name=WineHQ builds for CentOS 7
-baseurl=https://dl.winehq.org/wine-builds/centos/7/
-enabled=1
-gpgcheck=1
-gpgkey=https://dl.winehq.org/wine-builds/winehq.key
-WINEREPEOF
-
-# 优先 wine-staging，不可用时回退 wine-stable
-yum install -y winehq-staging 2>/dev/null || {
-    echo "[警告] wine-staging 不可用，改用 wine-stable ..."
-    yum install -y winehq-stable
-}
+# 2. Wine（WineHQ 已于 CentOS 7 EOL 后停止发布，centos/7 路径已 404）
+#    EPEL wine 在 CentOS 7 构建，天然兼容 glibc 2.17。
+echo "[信息] 安装 EPEL wine（glibc 2.17 兼容）..."
+yum install -y wine
 wine --version
 
-# 3. 确定 wine 安装路径（WineHQ on RHEL 安装到 /opt/wine-*）
+# 3. 确定 wine 前缀（EPEL 安装到 /usr，WineHQ 安装到 /opt/wine-*）
 if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
 elif [ -d /opt/wine-stable  ]; then WPFX=/opt/wine-stable
 else                                 WPFX=/usr
@@ -89,11 +72,36 @@ AD=/tmp/AppDir
 mkdir -p "$AD/usr/bin" "$AD/usr/lib" "$AD/usr/lib64" \
          "$AD/usr/share/wine" "$AD/usr/libexec"
 
-cp -a "$WPFX/bin/."    "$AD/usr/bin/"
-[ -d "$WPFX/lib"     ] && cp -a "$WPFX/lib/."     "$AD/usr/lib/"
-[ -d "$WPFX/lib64"   ] && cp -a "$WPFX/lib64/."   "$AD/usr/lib64/"
-[ -d "$WPFX/libexec" ] && cp -a "$WPFX/libexec/." "$AD/usr/libexec/"
-[ -d "$WPFX/share/wine" ] && cp -a "$WPFX/share/wine/." "$AD/usr/share/wine/"
+if [ "$WPFX" != "/usr" ]; then
+    # WineHQ（/opt/wine-*）：整个 prefix 直接复制
+    cp -a "$WPFX/bin/."    "$AD/usr/bin/"
+    [ -d "$WPFX/lib"     ] && cp -a "$WPFX/lib/."     "$AD/usr/lib/"
+    [ -d "$WPFX/lib64"   ] && cp -a "$WPFX/lib64/."   "$AD/usr/lib64/"
+    [ -d "$WPFX/libexec" ] && cp -a "$WPFX/libexec/." "$AD/usr/libexec/"
+    [ -d "$WPFX/share/wine" ] && cp -a "$WPFX/share/wine/." "$AD/usr/share/wine/"
+else
+    # EPEL wine（/usr）：用 rpm -ql 精确收集，避免把整个 /usr 打进去
+    echo "[信息] 收集 wine rpm 文件列表..."
+    rpm -qa | grep -i wine | xargs rpm -ql 2>/dev/null \
+        | grep -v '(contains no files)' | sort -u > /tmp/wine-files.txt
+    echo "[信息] 共 $(wc -l < /tmp/wine-files.txt) 个文件"
+
+    while IFS= read -r f; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        dst="$AD$f"
+        mkdir -p "$(dirname "$dst")"
+        cp -a "$f" "$dst" 2>/dev/null || true
+    done < /tmp/wine-files.txt
+
+    # 补充 libwine*.so 共享库（rpm 文件列表有时不含所有 .so 软链接）
+    find /usr/lib /usr/lib64 -maxdepth 2 \
+        \( -name 'libwine*' -o -name 'libwine*.so*' \) 2>/dev/null | \
+    while IFS= read -r lib; do
+        dst="$AD$lib"
+        mkdir -p "$(dirname "$dst")"
+        cp -a "$lib" "$dst" 2>/dev/null || true
+    done
+fi
 
 # 5. 应用 wrapper 补丁（含 progHome 修复和递归 guard）
 cp /src/wrapper "$AD/wrapper"
