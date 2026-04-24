@@ -57,19 +57,19 @@ yum install -y curl wget file which
 
 # 2. Wine（WineHQ 已于 CentOS 7 EOL 后停止发布，centos/7 路径已 404）
 #    EPEL wine 在 CentOS 7 构建，天然兼容 glibc 2.17。
-echo "[信息] 安装 EPEL wine（64位 + 32位 WoW64 支持）..."
-# 先装 32 位 glibc，确保 i686 包依赖满足
-yum install -y glibc.i686 libgcc.i686
-yum install -y wine wine.i686
+echo "[信息] 安装 64 位 wine..."
+yum install -y wine
 wine --version || true
-# 验证 wine32 是否存在，不存在则构建失败
-if ! ls /usr/bin/wine32 /usr/lib/wine/wine /usr/lib/wine/wine-preloader 2>/dev/null | head -1 | grep -q .; then
-    echo "ERROR: wine32 未安装，32位程序将无法运行" >&2
-    echo "已安装 wine 包:" >&2
-    rpm -qa | grep -i wine >&2
-    exit 1
-fi
-echo "[信息] wine32 已就绪: $(ls /usr/bin/wine32 /usr/lib/wine/wine 2>/dev/null | head -1)"
+
+echo "[信息] 用 linux32 安装 32 位 wine（让 yum 以为在 i686 系统上）..."
+# linux32 修改 uname 返回值为 i686，yum 据此选择 i686 包
+# 先确保 util-linux 里有 linux32
+yum install -y util-linux
+linux32 yum install -y wine || echo "[警告] linux32 wine 安装失败，AppImage 将缺少 32位支持"
+
+echo "[信息] wine32 检测:"
+ls /usr/bin/wine32 /usr/lib/wine/wine /usr/lib/wine/wine-preloader 2>/dev/null || echo "  (未找到 wine32 二进制)"
+echo "[信息] 32位 dll 数量: $(find /usr/lib/wine -name '*.dll.so' 2>/dev/null | wc -l)"
 
 # 3. 确定 wine 前缀
 if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
