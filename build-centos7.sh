@@ -119,7 +119,8 @@ else
         _real=$(readlink -f "$_src" 2>/dev/null)
         if [ -n "$_real" ] && [ -f "$_real" ]; then
             echo "[信息] 解析链接 $_src -> $_real"
-            cp -f "$_real" "$AD/usr/bin/$_bin"
+            rm -f "$AD/usr/bin/$_bin"          # 先删掉已复制进来的符号链接
+            cp "$_real" "$AD/usr/bin/$_bin"    # 再写入实体文件
             chmod +x "$AD/usr/bin/$_bin"
         fi
     done
