@@ -29,7 +29,7 @@ bash build-centos7.sh
 
 ### 第二步：部署到内网共享目录
 
-管理员将以下三个文件放到共享目录（例如 `/home/asrdictt/tyliu23/wine-share/`）：
+管理员将以下三个文件放到共享目录（例如 `/home/asrdictt/tyliu23/wine-share-file/`）：
 
 ```
 wine-staging-fixed.AppImage      ← 第一步构建产出
@@ -45,7 +45,7 @@ install-user.sh
 ### 第三步：每位用户各自安装（无需 root）
 
 ```bash
-bash /home/asrdictt/tyliu23/wine-share/install-user.sh
+bash /home/asrdictt/tyliu23/wine-share-file/install-user.sh
 source ~/.bashrc
 wine --version
 ```
@@ -87,7 +87,7 @@ wine --version
 
 ```bash
 bash ~/.local/share/wine-appimage/../../../  # 或直接：
-bash /home/asrdictt/tyliu23/wine/install-user.sh --uninstall
+bash /home/asrdictt/tyliu23/wine-share-file/install-user.sh --uninstall
 ```
 
 卸载只删除 AppImage 和 launcher，**不会删除** `~/.wine-appimage-staging/`（Wine 数据）。

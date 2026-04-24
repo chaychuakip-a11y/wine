@@ -20,7 +20,8 @@ if [ -z "$APPIMAGE" ]; then
     for _candidate in \
         "$_self_dir/wine-staging-fixed.AppImage" \
         "$HOME/.local/share/wine-appimage/wine-staging-fixed.AppImage" \
-        "/opt/wine-staging-fixed.AppImage"; do
+        "/opt/wine-staging-fixed.AppImage" \
+        "/home/asrdictt/tyliu23/wine-share-file/wine-staging-fixed.AppImage"; do
         if [ -x "$_candidate" ]; then
             APPIMAGE="$_candidate"
             break
