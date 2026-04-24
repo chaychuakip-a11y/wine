@@ -45,8 +45,19 @@ cat > "$INNER" << 'INNER_SCRIPT'
 #!/usr/bin/env bash
 set -ex
 
+# 0. CentOS 7 已 EOL，官方镜像关闭，切换到 vault.centos.org
+sed -i \
+    -e 's|^mirrorlist=|#mirrorlist=|g' \
+    -e 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+    /etc/yum.repos.d/CentOS-*.repo
+
 # 1. 基础依赖
 yum install -y epel-release
+# EPEL 在 vault 时代也需要指定镜像
+sed -i \
+    -e 's|^mirrorlist=|#mirrorlist=|g' \
+    -e 's|^#baseurl=https\?://download.fedoraproject.org/pub/epel|baseurl=https://archives.fedoraproject.org/pub/archive/epel|g' \
+    /etc/yum.repos.d/epel*.repo 2>/dev/null || true
 yum install -y curl wget file which
 
 # 2. WineHQ repo（RHEL 7 / CentOS 7）
