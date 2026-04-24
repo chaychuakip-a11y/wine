@@ -57,8 +57,8 @@ yum install -y curl wget file which
 
 # 2. Wine（WineHQ 已于 CentOS 7 EOL 后停止发布，centos/7 路径已 404）
 #    EPEL wine 在 CentOS 7 构建，天然兼容 glibc 2.17。
-echo "[信息] 安装 EPEL wine（glibc 2.17 兼容）..."
-yum install -y wine
+echo "[信息] 安装 EPEL wine（64位 + 32位 WoW64 支持）..."
+yum install -y wine wine.i686
 wine --version || true
 
 # 3. 确定 wine 前缀
@@ -80,7 +80,7 @@ if [ "$WPFX" != "/usr" ]; then
     mkdir -p "$AD$WPFX"
     cp -a "$WPFX/." "$AD$WPFX/" || { echo "ERROR: 复制 $WPFX 失败，磁盘可能已满" >&2; exit 1; }
     # 在 usr/bin 建相对符号链接，让 wrapper 能通过 $APPDIR/usr/bin/wine 找到
-    for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
+    for _bin in wine wine64 wine32 wine32-preloader wineserver wineboot winecfg; do
         _src="$WPFX/bin/$_bin"
         [ -e "$_src" ] || [ -L "$_src" ] || continue
         # 用相对路径避免绝对路径在 AppImage 解包后断链
@@ -105,7 +105,7 @@ else
     # /usr/bin/wine 经过 alternatives 链：
     #   /usr/bin/wine -> /etc/alternatives/wine -> 实际二进制
     # AppImage 内没有 /etc/alternatives/，把实际文件直接覆盖掉符号链接。
-    for _bin in wine wine64 wine32 wineserver wineboot winecfg; do
+    for _bin in wine wine64 wine32 wine32-preloader wineserver wineboot winecfg; do
         _src="/usr/bin/$_bin"
         [ -e "$_src" ] || continue
         _real=$(readlink -f "$_src" 2>/dev/null)
@@ -128,7 +128,7 @@ cat > "$AD/AppRun" << 'EOF'
 SELF="$(readlink -f "$0")"
 export APPDIR="$(dirname "$SELF")"
 export PATH="$APPDIR/usr/bin:$PATH"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64:$APPDIR/usr/lib/wine:$APPDIR/usr/lib64/wine:$APPDIR/usr/lib/wine/i386-unix:${LD_LIBRARY_PATH:-}"
 exec "$APPDIR/wrapper" "$@"
 EOF
 chmod +x "$AD/AppRun"
