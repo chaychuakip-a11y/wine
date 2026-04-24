@@ -37,81 +37,21 @@ echo "容器工具 : $DOCKER"
 echo "输出文件 : $OUTPUT_DIR/$OUTPUT_NAME"
 echo ""
 
-# -- 临时目录和内部脚本 -------------------------------------------------------
-WINE32_DIR=$(mktemp -d /tmp/wine32-XXXXXX)
-INNER=$(mktemp /tmp/wine-build-inner.XXXXXX.sh)
-trap 'rm -f "$INNER"; rm -rf "$WINE32_DIR"' EXIT
-
-# -- 阶段1：在 i386 容器内安装 32 位 wine 并提取文件 --------------------------
-echo "=== 阶段1：提取 32 位 wine 文件 (linux/386 容器) ==="
-"$DOCKER" run --rm --platform linux/386 \
-    -v "$WINE32_DIR:/wine32" \
-    centos:7 bash -c '
-set -e
-sed -i \
-    -e "s|^mirrorlist=|#mirrorlist=|g" \
-    -e "s|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g" \
-    /etc/yum.repos.d/CentOS-*.repo
-
-# 直接写 EPEL repo，跳过 epel-release 包（Extras 源在 EOL 环境下不稳定）
-# $basearch 在 i386 容器内会解析为 i386
-cat > /etc/yum.repos.d/epel.repo << EPELEOF
-[epel]
-name=Extra Packages for Enterprise Linux 7 - \$basearch
-baseurl=https://dl.fedoraproject.org/pub/epel/7/\$basearch/
-failovermethod=priority
-enabled=1
-gpgcheck=0
-EPELEOF
-
-yum install -y wine
-
-echo "[信息] 32位容器内 wine --version:"
-wine --version || true
-
-echo "[信息] 提取 32位 wine 文件到 /wine32 ..."
-rpm -qa | grep -i wine | xargs -r rpm -ql 2>/dev/null \
-    | grep -v "(contains no files)" | sort -u \
-    | while IFS= read -r f; do
-        [ -e "$f" ] || [ -L "$f" ] || continue
-        dst="/wine32$f"
-        mkdir -p "$(dirname "$dst")"
-        cp -a "$f" "$dst" 2>/dev/null || true
-    done
-
-# 解析 alternatives 软链（/usr/bin/wine -> /etc/alternatives/wine -> 实际二进制）
-for _bin in wine wine64 wine32 wine32-preloader wineserver wineboot winecfg; do
-    _src="/usr/bin/$_bin"
-    [ -e "$_src" ] || continue
-    _real=$(readlink -f "$_src" 2>/dev/null)
-    if [ -n "$_real" ] && [ -f "$_real" ]; then
-        rm -f "/wine32/usr/bin/$_bin"
-        cp "$_real" "/wine32/usr/bin/$_bin" && chmod +x "/wine32/usr/bin/$_bin"
-        echo "[信息] 解析 $_src -> $_real"
-    fi
-done
-
-echo "[信息] 32位 wine 文件数: $(find /wine32 -type f | wc -l)"
-echo "[信息] 32位 DLL 数量: $(find /wine32 -name "*.dll.so" | wc -l)"
-echo "[信息] wine 二进制:"
-ls -la /wine32/usr/bin/wine* 2>/dev/null || echo "  (未找到)"
-'
-
-echo ""
-echo "=== 阶段2：在 x86_64 容器内构建 AppImage ==="
-
 # -- 把容器内部的构建脚本写到临时文件，避免 heredoc 嵌套问题 ----------------
+INNER=$(mktemp /tmp/wine-build-inner.XXXXXX.sh)
+trap 'rm -f "$INNER"' EXIT
+
 cat > "$INNER" << 'INNER_SCRIPT'
 #!/usr/bin/env bash
 set -ex
 
-# 0. CentOS 7 已 EOL，官方镜像关闭，切换到 vault.centos.org
+# 0. CentOS 7 已 EOL，切换到 vault.centos.org
 sed -i \
     -e 's|^mirrorlist=|#mirrorlist=|g' \
     -e 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
     /etc/yum.repos.d/CentOS-*.repo
 
-# 1. 基础依赖（直接写 EPEL repo，跳过 epel-release 包）
+# 1. 配置 EPEL（直接写 repo 文件，不依赖 epel-release 包）
 cat > /etc/yum.repos.d/epel.repo << 'EPELEOF'
 [epel]
 name=Extra Packages for Enterprise Linux 7 - $basearch
@@ -123,14 +63,25 @@ EPELEOF
 
 yum install -y curl wget file which
 
-# 2. 安装 64 位 wine
-echo "[信息] 安装 64 位 wine..."
+# 2. 同时安装 64 位和 32 位 wine（multilib）
+#    x86_64 容器支持同时安装 .x86_64 和 .i686 包
+echo "[信息] 安装 wine.x86_64 ..."
 yum install -y wine
-wine --version || true
 
-echo "[信息] wine64 检测:"
-ls /usr/bin/wine64 /usr/lib64/wine/ 2>/dev/null || echo "  (未找到)"
-echo "[信息] 64位 dll 数量: $(find /usr/lib64/wine -name '*.dll.so' 2>/dev/null | wc -l)"
+echo "[信息] 安装 wine.i686（32位支持）..."
+# glibc.i686 是 i686 包的基础依赖
+yum install -y glibc.i686 || true
+yum install -y wine.i686 || echo "[警告] wine.i686 安装失败，尝试安装 wine-core.i686..."
+# 部分 EPEL 版本 wine 32位入口在 wine-core 里
+yum install -y wine-core.i686 2>/dev/null || true
+
+echo "[信息] 已安装 wine 相关包:"
+rpm -qa | grep -i wine | sort
+
+echo "[信息] wine 二进制:"
+ls -la /usr/bin/wine* /usr/lib/wine/wine* 2>/dev/null || true
+echo "[信息] 64位 DLL 数量: $(find /usr/lib64/wine -name '*.dll.so' 2>/dev/null | wc -l)"
+echo "[信息] 32位 DLL 数量: $(find /usr/lib/wine  -name '*.dll.so' 2>/dev/null | wc -l)"
 
 # 3. 确定 wine 前缀
 if   [ -d /opt/wine-staging ]; then WPFX=/opt/wine-staging
@@ -147,7 +98,7 @@ echo "[信息] wine 前缀: $WPFX"
 
 if [ "$WPFX" != "/usr" ]; then
     mkdir -p "$AD$WPFX"
-    cp -a "$WPFX/." "$AD$WPFX/" || { echo "ERROR: 复制 $WPFX 失败，磁盘可能已满" >&2; exit 1; }
+    cp -a "$WPFX/." "$AD$WPFX/" || { echo "ERROR: 复制 $WPFX 失败" >&2; exit 1; }
     for _bin in wine wine64 wine32 wine32-preloader wineserver wineboot winecfg; do
         _src="$WPFX/bin/$_bin"
         [ -e "$_src" ] || [ -L "$_src" ] || continue
@@ -156,8 +107,8 @@ if [ "$WPFX" != "/usr" ]; then
             cp -a "$_src" "$AD/usr/bin/$_bin" 2>/dev/null || true
     done
 else
-    # 纯 /usr 安装：用 rpm -ql 精确收集
-    echo "[信息] 收集 64位 wine rpm 文件列表..."
+    # 用 rpm -ql 收集所有 wine 相关文件（含 x86_64 和 i686 包）
+    echo "[信息] 收集 wine rpm 文件列表（含 32/64 位）..."
     rpm -qa | grep -i wine | xargs -r rpm -ql 2>/dev/null \
         | grep -v '(contains no files)' | sort -u > /tmp/wine-files.txt
     echo "[信息] 共 $(wc -l < /tmp/wine-files.txt) 个文件"
@@ -170,6 +121,7 @@ else
     done < /tmp/wine-files.txt
 
     # 解析 alternatives 软链
+    # /usr/bin/wine -> /etc/alternatives/wine -> 实际二进制
     for _bin in wine wine64 wine32 wine32-preloader wineserver wineboot winecfg; do
         _src="/usr/bin/$_bin"
         [ -e "$_src" ] || continue
@@ -181,58 +133,30 @@ else
             chmod +x "$AD/usr/bin/$_bin"
         fi
     done
-fi
 
-# 5. 合并 32 位 wine 文件（来自阶段1）
-echo "[信息] 合并 32 位 wine 文件..."
-if [ -d /wine32 ] && [ "$(find /wine32 -type f | wc -l)" -gt 0 ]; then
-    # 合并 lib（32位）
-    for _dir in /wine32/usr/lib /wine32/usr/lib/wine /wine32/usr/lib/wine/i386-unix; do
-        [ -d "$_dir" ] || continue
-        _rel="${_dir#/wine32}"
-        mkdir -p "$AD$_rel"
-        cp -a "$_dir/." "$AD$_rel/" 2>/dev/null || true
-    done
-
-    # 合并 32 位 wine 二进制（wine, wine32, wine-preloader）
-    for _bin in wine wine32 wine32-preloader wineserver; do
-        _src="/wine32/usr/bin/$_bin"
-        [ -f "$_src" ] || continue
-        # 32位二进制放到专用路径，避免覆盖64位
-        cp "$_src" "$AD/usr/bin/${_bin}32" 2>/dev/null || true
-        chmod +x "$AD/usr/bin/${_bin}32" 2>/dev/null || true
-        echo "[信息] 安装 32位二进制: $AD/usr/bin/${_bin}32"
-    done
-
-    # wine32 主入口（优先用 wine32，否则用 wine）
-    if [ -f "/wine32/usr/bin/wine32" ]; then
-        cp "/wine32/usr/bin/wine32" "$AD/usr/bin/wine32"
-        chmod +x "$AD/usr/bin/wine32"
-    elif [ -f "/wine32/usr/bin/wine" ]; then
-        cp "/wine32/usr/bin/wine" "$AD/usr/bin/wine32"
-        chmod +x "$AD/usr/bin/wine32"
+    # 如果 wine.i686 安装成功，/usr/lib/wine/ 下会有 32位 DLL
+    # 同时 /usr/bin/wine 实际上是 wine64，需要额外检查 wine32 是否存在
+    if [ ! -f "$AD/usr/bin/wine32" ]; then
+        # 尝试从 /usr/lib/wine/ 中找 wine 可执行文件
+        for _candidate in /usr/lib/wine/wine /usr/lib/wine/wine-preloader; do
+            [ -f "$_candidate" ] || continue
+            _base=$(basename "$_candidate")
+            cp "$_candidate" "$AD/usr/bin/$_base" && chmod +x "$AD/usr/bin/$_base"
+            echo "[信息] 补充 32位二进制: $AD/usr/bin/$_base"
+        done
+        # 若 wine32 仍缺，用 wine 的实际二进制（i686）复制过来
+        if [ ! -f "$AD/usr/bin/wine32" ] && [ -f "$AD/usr/bin/wine" ]; then
+            _arch=$(file "$AD/usr/bin/wine" | grep -o 'ELF [0-9]*-bit' | head -1)
+            echo "[信息] $AD/usr/bin/wine 架构: $_arch"
+        fi
     fi
-
-    # wine-preloader 32位
-    for _name in wine-preloader wine32-preloader; do
-        _src="/wine32/usr/bin/$_name"
-        [ -f "$_src" ] || continue
-        cp "$_src" "$AD/usr/bin/wine32-preloader"
-        chmod +x "$AD/usr/bin/wine32-preloader"
-        break
-    done
-
-    echo "[信息] 32位 DLL 合并完成: $(find "$AD/usr/lib" -name '*.dll.so' 2>/dev/null | wc -l) 个"
-    echo "[信息] wine32 二进制: $(ls -la "$AD/usr/bin/wine32" 2>/dev/null || echo '未找到')"
-else
-    echo "[警告] /wine32 目录为空，AppImage 将缺少 32 位支持！"
 fi
 
-# 6. 应用 wrapper 补丁
+# 5. 应用 wrapper 补丁
 cp /src/wrapper "$AD/wrapper"
 chmod 755 "$AD/wrapper"
 
-# 7. AppRun（设置库路径后交给 wrapper）
+# 6. AppRun
 cat > "$AD/AppRun" << 'EOF'
 #!/usr/bin/env bash
 SELF="$(readlink -f "$0")"
@@ -243,7 +167,7 @@ exec "$APPDIR/wrapper" "$@"
 EOF
 chmod +x "$AD/AppRun"
 
-# 8. Desktop entry + 图标
+# 7. Desktop entry + 图标
 mkdir -p "$AD/usr/share/applications" \
          "$AD/usr/share/icons/hicolor/256x256/apps"
 
@@ -267,17 +191,19 @@ fi
 ln -sf usr/share/icons/hicolor/256x256/apps/wine.png "$AD/wine.png"
 ln -sf usr/share/applications/wine.desktop           "$AD/wine.desktop"
 
+# 8. 汇总诊断
+echo ""
+echo "[信息] AppDir 内容摘要:"
+echo "  wine 二进制: $(ls "$AD/usr/bin/wine"* 2>/dev/null | tr '\n' ' ')"
+echo "  64位 DLL:   $(find "$AD/usr/lib64/wine" -name '*.dll.so' 2>/dev/null | wc -l) 个"
+echo "  32位 DLL:   $(find "$AD/usr/lib/wine"  -name '*.dll.so' 2>/dev/null | wc -l) 个"
+echo "  AppDir 大小: $(du -sh "$AD" 2>/dev/null | cut -f1)"
+
 # 9. 下载 appimagetool 并打包
 AT=/tmp/appimagetool.AppImage
 curl -fsSL -o "$AT" \
     https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
 chmod +x "$AT"
-
-echo "[信息] AppDir 内容摘要:"
-echo "  wine 二进制: $(ls "$AD/usr/bin/wine"* 2>/dev/null | tr '\n' ' ')"
-echo "  64位 DLL: $(find "$AD/usr/lib64/wine" -name '*.dll.so' 2>/dev/null | wc -l) 个"
-echo "  32位 DLL: $(find "$AD/usr/lib/wine" -name '*.dll.so' 2>/dev/null | wc -l) 个"
-echo "  AppDir 大小: $(du -sh "$AD" 2>/dev/null | cut -f1)"
 
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$AT" \
     "$AD" "/output/wine-staging-fixed.AppImage"
@@ -291,7 +217,6 @@ INNER_SCRIPT
     -v "$OUTPUT_DIR:/output" \
     -v "$WRAPPER:/src/wrapper:ro" \
     -v "$INNER:/build.sh:ro" \
-    -v "$WINE32_DIR:/wine32:ro" \
     centos:7 \
     bash /build.sh
 
