@@ -49,6 +49,18 @@ export TMPDIR="$BASE"
 # This extracts the AppImage to a temp dir on first run (slower, but no FUSE needed).
 if ! fusermount --version >/dev/null 2>&1 && ! fusermount3 --version >/dev/null 2>&1; then
     export APPIMAGE_EXTRACT_AND_RUN=1
+    # 集群环境：home 目录常挂载为 noexec（NFS/GPFS/Lustre），提取后的二进制无法执行。
+    # 检测方式：在 TMPDIR 写一个脚本并尝试执行，失败则切换到本地 /tmp。
+    _test_exec="$BASE/.exec_test_$$"
+    printf '#!/bin/sh\nexit 0\n' > "$_test_exec" 2>/dev/null && chmod +x "$_test_exec" 2>/dev/null
+    if ! "$_test_exec" >/dev/null 2>&1; then
+        # noexec：改用本地 /tmp（按 UID 隔离，避免多用户冲突）
+        BASE="/tmp/wine-appimage-$(id -u)"
+        mkdir -p "$BASE"
+        chmod 700 "$BASE"
+        export TMPDIR="$BASE"
+    fi
+    rm -f "$_test_exec" 2>/dev/null || true
 fi
 
 # Top-level recursion guard. The inner wrapper also has one, but we
