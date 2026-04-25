@@ -1,81 +1,58 @@
 #!/usr/bin/env bash
-# ------------------------------------------------------------------
-# Per-user state dir (replaces undefined $progHome and /tmp hardcoding)
-# ------------------------------------------------------------------
+# AppRun / wine wrapper for the CentOS-7-native wine AppImage.
+# 布局：wine 二进制在 $APPDIR/usr/bin/wine，bundled lib 在 $APPDIR/usr/lib64 与 $APPDIR/usr/lib。
+# 系统 glibc 必须由系统提供（CentOS 7 上是 2.17）；本 AppImage 不带 glibc。
+
+# Per-user state dir
 progHome="${XDG_CACHE_HOME:-$HOME/.cache}/wine-appimage-staging"
 mkdir -p "$progHome" 2>/dev/null
 
-# ------------------------------------------------------------------
-# Recursion guard
-# When wine/wineserver spawns a child PE (.exe) through exec*(), the
-# child can end up re-invoking this AppImage (binfmt / $PATH / xdg-open
-# lookups). That causes a fresh FUSE mount + full wrapper re-run for
-# every child, which looks like "AppRun runs the exe again and again".
-# We mark the current process tree with __WINE_APPIMAGE_ACTIVE and,
-# on re-entry, exec the inner wine binary directly with no re-setup.
-# ------------------------------------------------------------------
+# ── 递归保护：wine/wineserver 子进程会再次走到 AppImage 入口 ────────────
 if [ "${__WINE_APPIMAGE_ACTIVE:-0}" = "1" ] && [ -x "$APPDIR/usr/bin/wine" ] ; then
     exec "$APPDIR/usr/bin/wine" "$@"
 fi
 export __WINE_APPIMAGE_ACTIVE=1
 
-# WINE env
+# ── wine 环境 ─────────────────────────────────────────────────────────────
 export WINE="$APPDIR/usr/bin/wine"
+export WINESERVER="$APPDIR/usr/bin/wineserver"
+export WINELOADER="$APPDIR/usr/bin/wine"
 export WINEDEBUG=${WINEDEBUG:-"fixme-all"}
 export WINEPREFIX=${WINEPREFIX:-"$HOME/.wine-appimage-staging"}
-export WINESERVER="$APPDIR/usr/bin/wineserver"
-# 32位支持：wine64 在运行 32 位程序时会查找同目录的 wine32；
-# 这里同时设置 WINE32 env var 作为备选。
-if [ -x "$APPDIR/opt/wine-staging/bin/wine32" ]; then
-    export WINE32="$APPDIR/opt/wine-staging/bin/wine32"
-fi
+# wine 内部用 WINEDLLPATH 查 PE loader（.so）；64 + 32 都列上
+export WINEDLLPATH="$APPDIR/usr/lib64/wine:$APPDIR/usr/lib/wine${WINEDLLPATH:+:$WINEDLLPATH}"
+# bundled 依赖（freetype/X11/fontconfig 等）。glibc 不在里面，系统 ld 仍会用 /lib64/libc.so.6
+export LD_LIBRARY_PATH="$APPDIR/usr/lib64:$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# DXVK env
-export DXVK_HUD=${DXVK_HUD:-"0"}
+# DXVK env（构建时已 --without-vulkan，仅作占位）
 export DXVK_LOG_LEVEL=${DXVK_LOG_LEVEL:-"none"}
 export DXVK_STATE_CACHE=${DXVK_STATE_CACHE:-"0"}
 export DXVK_CONFIG_FILE=${DXVK_CONFIG_FILE:-"$progHome/dxvk.conf"}
 
-# check gpu vendor
-VENDOR=$(glxinfo -B 2>/dev/null | grep "OpenGL vendor")
-
-if [[ $VENDOR == *"Intel"* ]]; then
-  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/intel_icd.i686.json:/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
-elif [[ $VENDOR == *"NVIDIA"* ]]; then
-  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
-elif [[ $VENDOR == *"Radeon"* ]]; then
-  export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/radeon_icd.i686.json:/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
-fi
-
-# Load winecfg if no arguments given
+# 无参时启动 winecfg
 APPLICATION=""
 if [ -z "$*" ] ; then
-  APPLICATION="winecfg"
+    APPLICATION="winecfg"
 fi
 
-# Allow the AppImage to be symlinked to e.g., /usr/bin/wineserver
-if [ -n "$APPIMAGE" ] ; then
-  BINARY_NAME=$(basename "$ARGV0")
+# 允许 AppImage 被 symlink 成 wineserver/winecfg 等
+if [ -n "${APPIMAGE:-}" ] ; then
+    BINARY_NAME=$(basename "$ARGV0")
 else
-  BINARY_NAME=$(basename "$0")
+    BINARY_NAME=$(basename "$0")
 fi
 
-if [ -n "$1" ] && [ -e "$APPDIR/bin/$1" ] ; then
-  MAIN="$APPDIR/bin/$1" ; shift
-elif [ -n "$1" ] && [ -e "$APPDIR/usr/bin/$1" ] ; then
-  MAIN="$APPDIR/usr/bin/$1" ; shift
-elif [ -e "$APPDIR/bin/$BINARY_NAME" ] ; then
-  MAIN="$APPDIR/bin/$BINARY_NAME"
+# 选择实际要 exec 的二进制
+if [ -n "${1:-}" ] && [ -e "$APPDIR/usr/bin/$1" ] ; then
+    MAIN="$APPDIR/usr/bin/$1" ; shift
 elif [ -e "$APPDIR/usr/bin/$BINARY_NAME" ] ; then
-  MAIN="$APPDIR/usr/bin/$BINARY_NAME"
+    MAIN="$APPDIR/usr/bin/$BINARY_NAME"
 else
-  MAIN="$APPDIR/usr/bin/wine"
+    MAIN="$APPDIR/usr/bin/wine"
 fi
 
-# Use exec so we do not linger after the child exits (prevents the
-# parent shell from re-entering any logic above).
 if [ -z "$APPLICATION" ] ; then
-  exec "$MAIN" "$@"
+    exec "$MAIN" "$@"
 else
-  exec "$MAIN" "$APPLICATION"
+    exec "$MAIN" "$APPLICATION"
 fi
